@@ -1,0 +1,10 @@
+Timbre
+Copyright 2026 Reis Cook
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This software downloads and uses third-party machine-learning models and
+libraries at runtime, each under its own license, including (non-exhaustively):
+audio-separator / UVR models, NVIDIA NeMo (Sortformer, Nemotron ASR, TitaNet),
+WeSpeaker, SpeechBrain (ECAPA-TDNN), FireRedVAD, Silero VAD, and OpenAI Whisper.
+Refer to each project for its respective license terms.

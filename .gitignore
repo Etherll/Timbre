@@ -1,0 +1,92 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Timbre — .gitignore
+# Keeps the repo to source only. Runtime data, downloaded model weights,
+# generated output, caches, and large media are excluded.
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── Python bytecode / build artifacts ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ── Virtual environments ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── Test / lint / type caches & reports ────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+# Ad-hoc pytest run logs captured during development
+pytest_out.txt
+pytest_v.txt
+pytest_*.txt
+
+# ── Runtime data, weights, outputs (root-anchored so they never match the ──
+#    timbre/ package subdirs, e.g. timbre/models/) ─────────
+/output_runs/
+/output/
+/models/
+/repos/
+/pretrained_models/
+/.tmp/
+/.completed.json
+
+# ── Downloaded model weights / large binaries (never commit these) ─────────
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.nemo
+*.bin
+*.safetensors
+*.h5
+*.tflite
+
+# ── Media (input/output audio is data, not source) ─────────────────────────
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.mp4
+*.mkv
+*.mov
+
+# ── Logs & temp ────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+
+# ── Secrets / local env ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editors / OS cruft ─────────────────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.ipynb_checkpoints/
+
+# ── Agent / team process logs (local provenance, not project source) ───────
+.claude/
+MIGRATION-REMAINING.md

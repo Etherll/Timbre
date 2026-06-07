@@ -1,0 +1,46 @@
+# Timbre Requirements
+# Just run: pip install -r requirements.txt
+#
+# No Hugging Face token is required — every model source below is publicly downloadable
+# (audio-separator UVR models, NeMo nvidia/* models, FireRedTeam/FireRedVAD).
+
+# Core dependencies
+rich
+ffmpeg-python
+soundfile
+numpy
+tqdm
+
+# PyTorch with CUDA support (automatically uses CPU if no GPU)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.7.0
+torchvision>=0.22.0
+torchaudio>=2.7.0
+
+# Audio processing and ML
+pyannote.core>=5.0          # light: Annotation/Timeline contract (NOT pyannote.audio)
+openai-whisper>=20240930    # fallback ASR backend (--asr-backend whisper)
+matplotlib
+librosa
+speechbrain>=1.0.0          # ECAPA-TDNN speaker verification
+transformers                # NoisySpeechDetection classifier (--classify-and-clean)
+
+# Dependencies for components
+pyyaml
+scipy
+onnx
+onnxruntime
+
+# WeSpeaker — speaker identification / verification (auto-installed from git)
+wespeaker @ git+https://github.com/wenet-e2e/wespeaker.git
+
+# --- Model stack (no HF token) ---
+# Vocal separation — audio-separator (UVR / MDX-Net). Use [gpu] for CUDA onnxruntime.
+audio-separator[gpu]
+# Voice activity detection — FireRedVAD (download the model once from FireRedTeam/FireRedVAD).
+fireredvad
+
+# Diarization (NeMo Sortformer) + default ASR (NVIDIA Nemotron 3.5), both run via NeMo.
+# System packages first (Debian/Ubuntu):  apt-get install -y libsndfile1 ffmpeg
+# Then:  pip install Cython packaging
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main

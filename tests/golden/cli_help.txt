@@ -1,0 +1,277 @@
+usage: run_timbre.py [-h] --input-audio INPUT_AUDIO --reference-audio
+                     REFERENCE_AUDIO --target-name TARGET_NAME
+                     [--output-base-dir OUTPUT_BASE_DIR]
+                     [--output-sr OUTPUT_SR]
+                     [--separator-model SEPARATOR_MODEL]
+                     [--separator-model-dir SEPARATOR_MODEL_DIR]
+                     [--wespeaker-rvector-model WESPEAKER_RVECTOR_MODEL]
+                     [--wespeaker-gemini-model WESPEAKER_GEMINI_MODEL]
+                     [--diar-model DIAR_MODEL] [--whisper-model WHISPER_MODEL]
+                     [--asr-backend {nemotron,whisper}]
+                     [--nemotron-model NEMOTRON_MODEL]
+                     [--vad-model-dir VAD_MODEL_DIR]
+                     [--vad-backend {firered,silero,auto}]
+                     [--language LANGUAGE]
+                     [--diar-hyperparams DIAR_HYPERPARAMS] [--skip-separation]
+                     [--disable-speechbrain] [--skip-rejected-transcripts]
+                     [--concat-silence CONCAT_SILENCE] [--preload-whisper]
+                     [--classify-and-clean] [--min-duration MIN_DURATION]
+                     [--merge-gap MERGE_GAP]
+                     [--verification-threshold VERIFICATION_THRESHOLD]
+                     [--noise-threshold NOISE_THRESHOLD]
+                     [--seg-min-length SEG_MIN_LENGTH]
+                     [--seg-max-length SEG_MAX_LENGTH]
+                     [--seg-hard-max SEG_HARD_MAX]
+                     [--seg-min-silence SEG_MIN_SILENCE]
+                     [--seg-silence-thresh SEG_SILENCE_THRESH]
+                     [--seg-pad-ms SEG_PAD_MS] [--seg-snap-tol SEG_SNAP_TOL]
+                     [--word-align] [--export-tts] [--no-export-tts]
+                     [--tts-sr TTS_SR]
+                     [--dataset-format {ljspeech,ljspeech+jsonl}]
+                     [--loudness-target LOUDNESS_TARGET]
+                     [--eval-fraction EVAL_FRACTION]
+                     [--max-clips-per-file MAX_CLIPS_PER_FILE] [--resume]
+                     [--no-resume] [--qf-min-dur QF_MIN_DUR]
+                     [--qf-max-dur QF_MAX_DUR] [--qf-dnsmos QF_DNSMOS]
+                     [--allow-unvalidated-clips]
+                     [--worker-timeout WORKER_TIMEOUT]
+                     [--embedding-backend {wespeaker,ecapa,titanet}]
+                     [--separation-tier] [--dnsmos-filter]
+                     [--device {auto,cuda,cpu}] [--vram-budget VRAM_BUDGET]
+                     [--low-vram] [--asr-precision {fp32,auto,bf16,fp16}]
+                     [--dry-run] [--debug] [--keep-temp-files]
+
+Timbre — isolate, verify, and transcribe one target speaker for TTS data
+preparation. Uses audio-separator, NeMo Sortformer, WeSpeaker, SpeechBrain,
+FireRedVAD, and Nemotron/Whisper. No Hugging Face token required.
+
+options:
+  -h, --help            show this help message and exit
+
+Required Arguments:
+  --input-audio INPUT_AUDIO, -i INPUT_AUDIO
+                        Path to the main input audio file. (default: None)
+  --reference-audio REFERENCE_AUDIO, -r REFERENCE_AUDIO
+                        Path to a clean reference audio clip of the target
+                        speaker (for speaker ID/verification). (default: None)
+  --target-name TARGET_NAME, -n TARGET_NAME
+                        A name for the target speaker. (default: None)
+
+Path and Output Arguments:
+  --output-base-dir OUTPUT_BASE_DIR, -o OUTPUT_BASE_DIR
+                        Base directory for all output. (default:
+                        ./output_runs)
+  --output-sr OUTPUT_SR
+                        Sample rate for final extracted and concatenated SOLO
+                        audio segments (Hz). (default: 44100)
+
+Model Configuration Arguments:
+  --separator-model SEPARATOR_MODEL
+                        audio-separator model filename for vocal separation.
+                        Default is a Mel-Band RoFormer (Kim FT2 by unwa) —
+                        cleaner vocal isolation than the older BS-Roformer,
+                        runs on GPU via PyTorch. Pass
+                        'model_bs_roformer_ep_317_sdr_12.9755.ckpt' for the
+                        previous BS-Roformer default. Downloaded automatically
+                        on first use. (default:
+                        mel_band_roformer_kim_ft2_unwa.ckpt)
+  --separator-model-dir SEPARATOR_MODEL_DIR
+                        Directory where the audio-separator checkpoint is
+                        stored/loaded (resolved against the repo root if
+                        relative). Default: pretrained_models/audio-separator
+                        (keeps the model under the repo instead of /tmp).
+                        (default: pretrained_models/audio-separator)
+  --wespeaker-rvector-model WESPEAKER_RVECTOR_MODEL
+                        WeSpeaker Deep r-vector model identifier ('english',
+                        'chinese') or local path to model directory with
+                        avg_model.pt and config.yaml. (default: english)
+  --wespeaker-gemini-model WESPEAKER_GEMINI_MODEL
+                        WeSpeaker verification model identifier ('english',
+                        'chinese') or local path to model directory with
+                        avg_model.pt and config.yaml. (default: english)
+  --diar-model DIAR_MODEL
+                        NeMo Sortformer speaker diarization model (public;
+                        supports up to 4 speakers). Overlap is derived from
+                        the diarization. (default:
+                        nvidia/diar_sortformer_4spk-v1)
+  --whisper-model WHISPER_MODEL
+                        Whisper model name (used when --asr-backend whisper).
+                        (default: large-v3)
+  --asr-backend {nemotron,whisper}
+                        ASR backend for transcription. 'nemotron' (default):
+                        NVIDIA Nemotron 3.5 ASR Streaming. 'whisper': OpenAI
+                        Whisper. (default: nemotron)
+  --nemotron-model NEMOTRON_MODEL
+                        Nemotron ASR HuggingFace model id (used when --asr-
+                        backend nemotron). (default: nvidia/nemotron-3.5-asr-
+                        streaming-0.6b)
+  --vad-model-dir VAD_MODEL_DIR
+                        Local directory of the FireRedVAD model (download once
+                        from HF FireRedTeam/FireRedVAD; no token). (default:
+                        pretrained_models/FireRedVAD/VAD)
+  --vad-backend {firered,silero,auto}
+                        Voice-activity backend for word-safe spans. 'auto'
+                        (default): FireRedVAD, then Silero VAD fallback if
+                        FireRedVAD fails or returns no spans.
+                        'firered'/'silero': force one backend. (default: auto)
+
+Processing Control Arguments:
+  --language LANGUAGE   Language code for transcription (e.g., 'en', 'es',
+                        'auto'). Mapped to a Nemotron locale; passed to
+                        Whisper directly. (default: en)
+  --diar-hyperparams DIAR_HYPERPARAMS
+                        Advanced: JSON string of extra keyword arguments for
+                        the diarizer (backend-dependent). (default: {})
+  --skip-separation     Skip the audio-separator vocal separation stage (use
+                        original audio for downstream). (default: False)
+  --disable-speechbrain
+                        Disable SpeechBrain ECAPA-TDNN for speaker
+                        verification (other verification models will still
+                        run). (default: False)
+  --skip-rejected-transcripts
+                        Skip transcription of segments that were rejected by
+                        speaker verification. (default: False)
+  --concat-silence CONCAT_SILENCE
+                        Duration of silence (seconds) between concatenated
+                        SOLO verified segments. (default: 0.25)
+  --preload-whisper     Pre-load Whisper model at startup (can save time if
+                        RAM is sufficient). (default: False)
+  --classify-and-clean  After verification, classify segments as clean/noisy
+                        and run audio-separator on only the noisy ones.
+                        (default: False)
+
+Fine-tuning Parameters for SOLO Segments:
+  --min-duration MIN_DURATION
+                        Minimum duration (seconds) for a refined SOLO voice
+                        segment to be kept. (default: 1.0)
+  --merge-gap MERGE_GAP
+                        Maximum gap (seconds) between target speaker's SOLO
+                        segments to merge them. (default: 0.25)
+  --verification-threshold VERIFICATION_THRESHOLD
+                        Minimum combined speaker verification score (0.0-1.0)
+                        for a SOLO segment. (default: 0.7)
+  --noise-threshold NOISE_THRESHOLD
+                        Cleanliness threshold (0-1) for NoisySpeechDetection
+                        model when using --classify-and-clean. (default: 0.7)
+
+Word-Safe Segmentation Arguments:
+  --seg-min-length SEG_MIN_LENGTH, --seg-min-dur SEG_MIN_LENGTH
+                        Accumulate target-speaker audio to at least this many
+                        seconds before a soft cut. (default: 3.0)
+  --seg-max-length SEG_MAX_LENGTH, --seg-max-dur SEG_MAX_LENGTH
+                        Preferred maximum clip duration (seconds); cut at the
+                        next silence once reached. (default: 15.0)
+  --seg-hard-max SEG_HARD_MAX, --seg-hard-max-dur SEG_HARD_MAX
+                        Hard maximum clip duration (seconds); force a cut at
+                        the quietest frame by here. (default: 20.0)
+  --seg-min-silence SEG_MIN_SILENCE
+                        Minimum silence-run length (seconds) for a run to
+                        qualify as a valid cut boundary. (default: 0.3)
+  --seg-silence-thresh SEG_SILENCE_THRESH
+                        Silence threshold (dBFS, float32 ref=1.0): a frame is
+                        silent if its RMS is at/below this. (default: -38.0)
+  --seg-pad-ms SEG_PAD_MS
+                        Silence padding (ms) kept on each side of a clip,
+                        taken only from inside the silence. (default: 150.0)
+  --seg-snap-tol SEG_SNAP_TOL
+                        Maximum distance (seconds) a proposed boundary may
+                        move to reach a validated silence run. (default: 0.75)
+  --word-align          Enable Tier-2 forced alignment (NeMo NFA) for
+                        sentence-natural stops + exact per-clip transcripts.
+                        Alignment proposes, silence disposes. Opt-in.
+                        (default: False)
+
+TTS Dataset Export Arguments:
+  --export-tts          Write an LJSpeech TTS dataset (metadata.csv + per-
+                        speaker wavs/). Default ON. (default: True)
+  --no-export-tts       Disable the LJSpeech TTS dataset export. (default:
+                        True)
+  --tts-sr TTS_SR       Sample rate (Hz) for the TTS dataset export wavs.
+                        Distinct from --output-sr (legacy concatenated SOLO,
+                        44100). (default: 24000)
+  --dataset-format {ljspeech,ljspeech+jsonl}
+                        Dataset manifest format. 'ljspeech': metadata.csv
+                        only. 'ljspeech+jsonl': also emit a NeMo-style
+                        metadata.jsonl superset. (default: ljspeech)
+  --loudness-target LOUDNESS_TARGET
+                        Export loudness target (LUFS), applied LAST via
+                        pyloudnorm before 16-bit write. Set high (e.g. 0) to
+                        effectively disable. (default: -23.0)
+  --eval-fraction EVAL_FRACTION
+                        Fraction of clips placed in a deterministic, disjoint
+                        eval split (train.csv / eval.csv). (default: 0.1)
+  --max-clips-per-file MAX_CLIPS_PER_FILE
+                        Per-input-file cap on emitted clips (forward-progress
+                        guard against pathological audio). (default: 10000)
+  --resume              Skip input files already recorded as completed in the
+                        dataset manifest. Default ON. (default: True)
+  --no-resume           Reprocess every input file even if already completed.
+                        (default: True)
+
+Quality-Filter Gate Arguments:
+  --qf-min-dur QF_MIN_DUR
+                        Quality gate: reject exported clips shorter than this
+                        many seconds. (default: 1.0)
+  --qf-max-dur QF_MAX_DUR
+                        Quality gate: reject exported clips longer than this
+                        many seconds. (default: 15.0)
+  --qf-dnsmos QF_DNSMOS
+                        Quality gate: DNSMOS P.835 OVRL floor (e.g. 3.0).
+                        Default off; auto-disabled if the DNSMOS weight is
+                        absent (never crashes). (default: None)
+  --allow-unvalidated-clips
+                        Include clips whose boundaries could NOT be silence-
+                        validated (hard-max force-splits, or VAD-unavailable
+                        sources). Default OFF: such clips are quarantined from
+                        the dataset so it contains zero mid-word clips.
+                        (default: False)
+
+Unattended-Run Safety:
+  --worker-timeout WORKER_TIMEOUT
+                        Wall-clock timeout (seconds) for an isolated worker
+                        subprocess (separation / ASR). A hung worker is killed
+                        and skipped instead of blocking the run forever. Set 0
+                        to disable. (default: 1800.0)
+
+Speaker-Embedding Backend:
+  --embedding-backend {wespeaker,ecapa,titanet}
+                        Target-speaker embedding backend for verification.
+                        'wespeaker' (default, legacy). 'ecapa': SpeechBrain
+                        ECAPA-TDNN (no wespeaker/torchaudio>=2.10 import
+                        break). 'titanet': NeMo TitaNet-Large. (default:
+                        wespeaker)
+
+Optional Accuracy Tiers:
+  --separation-tier     Enable the opt-in HQ separation tier (Mel-Band
+                        RoFormer). Auto-disabled if the model is unavailable.
+                        (default: False)
+  --dnsmos-filter       Enable the opt-in DNSMOS P.835 quality filter on
+                        exported clips. Auto-disabled if the weight is
+                        unavailable. (default: False)
+
+Memory / VRAM Policy Arguments:
+  --device {auto,cuda,cpu}
+                        Compute device. 'auto' (default): use CUDA when
+                        available, else CPU. 'cuda': force GPU. 'cpu': force
+                        CPU (correctness fallback; slow). (default: auto)
+  --vram-budget VRAM_BUDGET
+                        Free-VRAM budget (GB) under which the low-memory
+                        policy is auto-selected. Default: built-in threshold
+                        (~10 GB). (default: None)
+  --low-vram            Force the low-memory policy: load verification models
+                        late and free each heavy model at its stage boundary
+                        to lower peak VRAM. Output is unchanged. (default:
+                        False)
+  --asr-precision {fp32,auto,bf16,fp16}
+                        ASR-only compute precision. 'fp32' (default): byte-
+                        identical to today. 'auto'/'bf16'/'fp16': reduce ASR
+                        VRAM (capability-gated; never affects verification).
+                        (default: fp32)
+
+Debugging and Miscellaneous:
+  --dry-run, -d         Limits diarization to first 60s of audio for quick
+                        testing. (default: False)
+  --debug               Enable verbose DEBUG level logging and potentially
+                        more detailed tracebacks. (default: False)
+  --keep-temp-files     Keep temporary processing directory
+                        (__tmp_processing). (default: False)

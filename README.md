@@ -14,8 +14,14 @@ LJSpeech-style TTS dataset whose clips never cut mid-word.
 
 ### Google Colab (GUI, no local install)
 
-Run it in the browser with a notebook UI:
-[Timbre_Colab](https://colab.research.google.com/github/ReisCook/Timbre_Colab/blob/main/Timbre_Colab.ipynb)
+Run it in the browser on a free **T4 GPU** — paste a YouTube link or upload a file, pick a
+reference clip in the form, and download a ready-to-train LJSpeech dataset:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Etherll/Timbre/blob/main/Timbre_YouTube_to_TTS.ipynb)
+
+[`Timbre_YouTube_to_TTS.ipynb`](https://github.com/Etherll/Timbre/blob/main/Timbre_YouTube_to_TTS.ipynb)
+walks you through GPU check → install → input (YouTube/upload) → target + reference → run →
+preview → download, all as Colab form cells.
 
 ---
 

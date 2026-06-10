@@ -72,7 +72,6 @@ def _ensure(pkgs):
     except ImportError:
         pass
     
-    # Continue with the rest of the packages
     installed_pkgs_details = []
     missing_pkgs_to_install_specs = []
 
@@ -336,7 +335,6 @@ def _import_dependencies():
         torchvision = None
         pass
 
-    # Now set up console and logging
     console = Console(width=120)
     logging.basicConfig(
         level="INFO",
@@ -874,7 +872,6 @@ def ensure_repositories(component_usage=None):
 
 
 if __name__ == '__main__':
-    # For testing
     component_usage = {
         'use_separation': True,
         'use_speechbrain': True,

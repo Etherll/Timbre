@@ -231,7 +231,6 @@ def init_wespeaker_models(rvector_id_or_path: str, gemini_id_or_path: str) -> di
                 else:
                     model_id = model_id_or_path.lower()
                 
-                # Download with retry logic for reliability
                 model = None
                 max_retries = 3
                 for attempt in range(max_retries):
@@ -261,7 +260,6 @@ def init_wespeaker_models(rvector_id_or_path: str, gemini_id_or_path: str) -> di
             log.error(f"Failed to load WeSpeaker {model_desc} model: {e}")
             log.error("This may be due to network issues during model download.")
             log.error("Please check your internet connection and try again.")
-            # For essential models, we should fail here
             if model_key == "rvector":  # r-vector is critical for speaker identification
                 return None
     
@@ -305,7 +303,7 @@ def init_speechbrain_speaker_recognition_model(model_source: str = "speechbrain/
             savedir=str(savedir),
             run_opts={"device": DEVICE.type}
         )
-        model.eval() # Set to evaluation mode
+        model.eval()
         log.info(f"[green]✓ SpeechBrain ECAPA-TDNN encoder '{model_source}' loaded to {DEVICE.type.upper()}.[/]")
         return model
     except Exception as e:
@@ -507,6 +505,51 @@ def run_vocal_separation(
     return vocals_output_filename
 
 
+def check_input_bandwidth(input_audio_file: Path) -> bool:
+    """Warn when the input file appears bandwidth-limited (T4 warn-only check).
+
+    Loads the raw input, estimates its effective bandwidth via
+    ``timbre.audio.math.estimate_effective_bandwidth`` (spectral rolloff at the
+    99th-percentile energy threshold), and emits a ``logger.warning`` when the
+    rolloff frequency is below 75% of Nyquist (``sr / 2 * 0.75``).
+
+    Returns ``True`` when the input is bandwidth-limited (warning was emitted),
+    ``False`` otherwise. Always returns ``False`` when librosa is unavailable
+    (the math function returns ``nan`` and the caller skips silently with a
+    ``logger.debug``). NEVER raises or aborts the pipeline.
+
+    The result is intended for the run summary dict (``bandwidth_limited`` key).
+    """
+    from timbre.audio.math import estimate_effective_bandwidth, BW_THRESHOLD_RATIO
+    try:
+        audio, sr = sf.read(str(input_audio_file), dtype="float32", always_2d=False)
+        if getattr(audio, "ndim", 1) > 1:
+            audio = audio.mean(axis=1).astype(np.float32)
+    except Exception as e:
+        log.debug(f"Bandwidth check: could not load '{input_audio_file.name}': {e}; skipping.")
+        return False
+
+    rolloff_hz = estimate_effective_bandwidth(audio, sr)
+    import math as _math
+    if _math.isnan(rolloff_hz):
+        log.debug("Bandwidth check: librosa unavailable; skipping effective-bandwidth estimate.")
+        return False
+
+    nyquist_hz = sr / 2.0
+    threshold_hz = nyquist_hz * BW_THRESHOLD_RATIO
+    if rolloff_hz < threshold_hz:
+        log.warning(
+            f"Bandwidth check: '{input_audio_file.name}' appears bandwidth-limited — "
+            f"spectral rolloff at 99th percentile is {rolloff_hz:.0f} Hz "
+            f"(threshold: {threshold_hz:.0f} Hz = {BW_THRESHOLD_RATIO*100:.0f}% of Nyquist "
+            f"{nyquist_hz:.0f} Hz). "
+            "The export Nyquist is determined by --tts-sr (default 24000 Hz = 12000 Hz Nyquist). "
+            "Consider using a higher-quality source to avoid upsampled-silence in the dataset."
+        )
+        return True
+    return False
+
+
 def diarize_audio(
     input_audio_file: Path, tmp_dir: Path,
     model_config: dict, dry_run: bool = False
@@ -623,11 +666,12 @@ def detect_overlapped_regions(diarization_annotation: Annotation) -> Timeline:
 
 
 def identify_target_speaker(
-    annotation: Annotation, 
+    annotation: Annotation,
     input_audio_file: Path, # Audio file from which segments are derived (e.g., bandit output)
     processed_reference_file: Path, # Reference audio (16kHz mono)
     target_name: str,
-    wespeaker_rvector_model # WeSpeaker Deep r-vector model instance
+    wespeaker_rvector_model, # WeSpeaker Deep r-vector model instance
+    ref_embedding: "np.ndarray | None" = None,  # Pre-computed prototype; skips re-embedding when supplied
 ) -> str | None:
     log.info(f"Identifying '{target_name}' among diarized speakers using WeSpeaker Deep r-vector and reference: {processed_reference_file.name}")
 
@@ -638,12 +682,16 @@ def identify_target_speaker(
         log.error(f"Processed reference audio not found: {processed_reference_file}. Cannot ID target.")
         return None
 
-    try:
-        ref_embedding = wespeaker_rvector_model.extract_embedding(str(processed_reference_file))
-        log.debug(f"Reference embedding for '{target_name}' extracted, shape: {ref_embedding.shape}")
-    except Exception as e:
-        log.error(f"Failed to extract embedding from reference audio '{processed_reference_file.name}' using WeSpeaker: {e}")
-        return None
+    if ref_embedding is not None:
+        # Use the pre-computed multi-clip prototype (L2-normalized mean); skip re-embedding.
+        log.debug(f"Reference embedding for '{target_name}' supplied by caller (multi-clip prototype), shape: {ref_embedding.shape}")
+    else:
+        try:
+            ref_embedding = wespeaker_rvector_model.extract_embedding(str(processed_reference_file))
+            log.debug(f"Reference embedding for '{target_name}' extracted, shape: {ref_embedding.shape}")
+        except Exception as e:
+            log.error(f"Failed to extract embedding from reference audio '{processed_reference_file.name}' using WeSpeaker: {e}")
+            return None
 
     # Create a temporary directory for speaker segment audio files
     # This is because WeSpeaker model.extract_embedding expects file paths
@@ -658,14 +706,7 @@ def identify_target_speaker(
 
         log.info(f"Comparing reference of '{target_name}' with {len(unique_speaker_labels)} diarized speakers using WeSpeaker r-vector.")
         
-        # We need to extract audio segments for each speaker.
-        # The input_audio_file is the source (e.g., bandit output or original).
-        # Segments from diarization are relative to this input_audio_file.
-        # WeSpeaker expects 16kHz for its pre-trained models. Ensure segments are 16kHz.
-        # The diarization itself should have run on 16kHz audio, so segment times are for that.
-        # Bandit output SR might be different, so resampling of segments might be needed if input_audio_file is bandit output.
-        # For simplicity, assume input_audio_file is already at a common SR or ff_slice handles it.
-        # It's safer to always resample segments to 16kHz for WeSpeaker.
+        # Slice each speaker's diarized segments from input_audio_file and resample to 16kHz mono - WeSpeaker's pretrained models expect 16kHz; the source SR may differ.
         
         for spk_label in unique_speaker_labels:
             speaker_segments_timeline = annotation.label_timeline(spk_label)
@@ -685,7 +726,6 @@ def identify_target_speaker(
                 # Slice segment from input_audio_file and resample to 16kHz for WeSpeaker
                 temp_seg_path = temp_seg_dir / f"{safe_filename(spk_label)}_seg_{i}.wav"
                 try:
-                    # ff_slice will take care of format (wav) and resampling (16kHz mono)
                     ff_slice(input_audio_file, temp_seg_path, seg.start, seg.end, target_sr=16000, target_ac=1)
                     if temp_seg_path.exists() and temp_seg_path.stat().st_size > 0:
                         temp_speaker_audio_list.append(temp_seg_path)
@@ -721,7 +761,7 @@ def identify_target_speaker(
             if speaker_concat_audio_path.exists() and speaker_concat_audio_path.stat().st_size > 0:
                 try:
                     spk_embedding = wespeaker_rvector_model.extract_embedding(str(speaker_concat_audio_path))
-                    similarity = cos(ref_embedding, spk_embedding) # Using common.cos for numpy arrays
+                    similarity = cos(ref_embedding, spk_embedding)
                     speaker_similarities[spk_label] = similarity
                 except Exception as e_embed:
                     log.warning(f"Error extracting WeSpeaker embedding for speaker '{spk_label}': {e_embed}. Similarity set to 0.")
@@ -843,6 +883,7 @@ def verify_speaker_segment(
     speechbrain_sb_model: 'SpeechBrainSpeakerRecognition', # SpeechBrain ECAPA-TDNN model instance
     verification_strategy: str = "weighted_average", # or "sequential_gauntlet" (not fully implemented)
     embedder=None,                   # optional non-wespeaker SpeakerEmbedder (timbre.embedding)
+    ref_embedding: "np.ndarray | None" = None,  # Pre-computed prototype; skips re-embedding when supplied
 ) -> tuple[float, dict]:
     """
     Performs multi-stage speaker verification on an audio segment.
@@ -853,6 +894,11 @@ def verify_speaker_segment(
     WeSpeaker — preserving the frozen fusion weights (0.4 + 0.3 + 0.3) so the accept/reject
     math is unchanged in shape (parity). ``embedder=None`` (DEFAULT) keeps the byte-for-byte
     WeSpeaker path.
+
+    When ``ref_embedding`` is provided (multi-clip prototype computed in run_timbre.py),
+    the reference file is NOT re-read from disk — only the segment is embedded and scored
+    against the pre-computed prototype. ``ref_embedding=None`` (DEFAULT) preserves the
+    original per-call re-embedding behavior exactly.
     """
     # RB1: an UNAVAILABLE component is None (NOT 0.0), so combine_verification_scores
     # re-normalizes the fusion weights over the components that actually produced a score.
@@ -867,7 +913,7 @@ def verify_speaker_segment(
     seg_name = segment_audio_path.name
 
     # Ensure reference and segment audio are suitable for models (16kHz, mono)
-    # This function assumes they are already prepared. If not, they should be converted before calling.
+    # Reference and segment paths are assumed already prepared as 16kHz mono upstream.
 
     if embedder is not None:
         # --- Non-wespeaker backend (ECAPA / TitaNet): fill BOTH the r-vector and gemini
@@ -875,9 +921,13 @@ def verify_speaker_segment(
         # full 1.0 of weight (parity with the wespeaker ensemble's score shape). ---
         try:
             from timbre.embedding import cosine as _emb_cos
-            ref_emb = embedder.embed(str(reference_audio_path))
+            # F2: ref_embedding is the multi-clip prototype computed with the WeSpeaker
+            # r-vector model. A non-wespeaker embedder (ECAPA / TitaNet) lives in a
+            # DIFFERENT embedding space, so the prototype must never be reused here —
+            # the embedder re-embeds the reference in its own space.
+            _ref_emb = embedder.embed(str(reference_audio_path))
             seg_emb = embedder.embed(str(segment_audio_path))
-            sim = _emb_cos(ref_emb, seg_emb)
+            sim = _emb_cos(_ref_emb, seg_emb)
             scores["wespeaker_rvector"] = sim
             scores["wespeaker_gemini"] = sim
             log.debug(f"Embedder ({type(embedder).__name__}) score for {seg_name}: {sim:.4f}")
@@ -887,10 +937,14 @@ def verify_speaker_segment(
     elif wespeaker_models and wespeaker_models.get("rvector"):
         try:
             ws_rvector_model = wespeaker_models["rvector"]
-            # WeSpeaker expects file paths.
-            ref_emb = ws_rvector_model.extract_embedding(str(reference_audio_path))
+            # When ref_embedding is pre-computed (multi-clip prototype), skip re-reading the
+            # reference file from disk (saves one extract_embedding call per segment).
+            if ref_embedding is not None:
+                _ref_emb = ref_embedding
+            else:
+                _ref_emb = ws_rvector_model.extract_embedding(str(reference_audio_path))
             seg_emb = ws_rvector_model.extract_embedding(str(segment_audio_path))
-            scores["wespeaker_rvector"] = cos(ref_emb, seg_emb)
+            scores["wespeaker_rvector"] = cos(_ref_emb, seg_emb)
             log.debug(f"WeSpeaker r-vector score for {seg_name}: {scores['wespeaker_rvector']:.4f}")
         except Exception as e:
             log.warning(f"WeSpeaker r-vector verification failed for {seg_name}: {e}")
@@ -899,7 +953,7 @@ def verify_speaker_segment(
     # RB4: score via cosine over encode_batch embeddings (NOT verify_files, which trips the
     # SpeechBrain 1.1.0 integrations.k2_fsa lazy import when k2 is absent). This restores ECAPA
     # as a real 3rd fusion component.
-    if speechbrain_sb_model and HAVE_SPEECHBRAIN: # HAVE_SPEECHBRAIN check is redundant if model is passed
+    if speechbrain_sb_model and HAVE_SPEECHBRAIN:
         try:
             scores["speechbrain_ecapa"] = _ecapa_cosine_score(
                 speechbrain_sb_model, reference_audio_path, segment_audio_path
@@ -923,22 +977,28 @@ def verify_speaker_segment(
     if embedder is None and wespeaker_models and wespeaker_models.get("gemini"):
         try:
             ws_gemini_model = wespeaker_models["gemini"]
-            ref_emb_gemini = ws_gemini_model.extract_embedding(str(reference_audio_path))
+            # F2: the pre-computed prototype lives in the r-vector embedding space. Reuse it
+            # for Gemini ONLY when the gemini model IS the aliased r-vector object (default
+            # config dedups identical model ids into one instance). A distinct gemini model
+            # must re-embed the reference in its own space — a cross-model-space cosine is
+            # meaningless and can silently score ~0.
+            if ref_embedding is not None and ws_gemini_model is wespeaker_models.get("rvector"):
+                _ref_emb_gemini = ref_embedding
+            else:
+                _ref_emb_gemini = ws_gemini_model.extract_embedding(str(reference_audio_path))
             seg_emb_gemini = ws_gemini_model.extract_embedding(str(segment_audio_path))
-            scores["wespeaker_gemini"] = cos(ref_emb_gemini, seg_emb_gemini)
+            scores["wespeaker_gemini"] = cos(_ref_emb_gemini, seg_emb_gemini)
             log.debug(f"WeSpeaker Gemini score for {seg_name}: {scores['wespeaker_gemini']:.4f}")
         except Exception as e:
             log.warning(f"WeSpeaker Gemini verification failed for {seg_name}: {e}")
     
     # --- Voice Activity Check ---
     # VAD runs on segment_audio_path, expects 16kHz mono (librosa handles loading)
-    scores["voice_activity_factor"] = 1.0 if check_voice_activity(segment_audio_path) else 0.1 # Multiplier
+    scores["voice_activity_factor"] = 1.0 if check_voice_activity(segment_audio_path) else 0.1
 
     # --- Combine Scores ---
     # Default: Weighted average. Weights can be tuned.
     # Example weights: r-vector (0.4), ECAPA (0.3), Gemini (0.3)
-    # This is a simple combination; more sophisticated fusion could be used.
-    # For sequential gauntlet: would involve if score1 > T1 and score2 > T2 ...
     
     # Score fusion lives in timbre.verification (pure + unit-tested).
     final_score = combine_verification_scores(scores, verification_strategy)
@@ -1080,6 +1140,7 @@ def slice_and_verify_target_solo_segments(
     vad_model_dir: str | None = None,        # FireRedVAD dir for source-level spans
     max_clips_per_file: int = 10000,         # per-file clip cap (forward-progress guard)
     embedder=None,                           # optional non-wespeaker SpeakerEmbedder (opt-in)
+    ref_embedding: "np.ndarray | None" = None,  # Pre-computed prototype; threaded to verify_speaker_segment
 ) -> tuple[list[Path], list[Path]]:
     log.info(f"Refining and processing SOLO segments for '{target_name}' (label: {identified_target_label}).")
 
@@ -1113,7 +1174,6 @@ def slice_and_verify_target_solo_segments(
         log.warning(f"No solo segments for '{target_name}' after merging/duration filtering. Skipping.")
         return [], []
 
-    # Setup output directories for verified and rejected segments
     safe_target_name_prefix = safe_filename(target_name)
     solo_segments_verified_dir = output_segments_base_dir / f"{safe_target_name_prefix}_solo_verified"
     solo_segments_rejected_dir = output_segments_base_dir / f"{safe_target_name_prefix}_solo_rejected_for_review"
@@ -1144,9 +1204,7 @@ def slice_and_verify_target_solo_segments(
             base_seg_name = build_segment_basename(seg_obj.start, seg_obj.end, i)
             seg_validated = _seg_is_validated(seg_obj)
 
-            # Create 16kHz version for verification
             tmp_verif_seg_path = tmp_pre_verification_segments_dir / f"{base_seg_name}.wav"
-            # Create high-quality version for final output
             tmp_hq_seg_path = tmp_high_quality_segments_dir / f"{base_seg_name}_hq.wav"
 
             try:
@@ -1188,11 +1246,12 @@ def slice_and_verify_target_solo_segments(
                 temp_16k_path, processed_reference_file,
                 wespeaker_models_dict, speechbrain_sb_model_inst,
                 embedder=embedder,
+                ref_embedding=ref_embedding,
             )
             segment_verification_scores_map[str(temp_16k_path)] = final_score
             pb_verify.update(task_verify, advance=1)
 
-    if DEVICE.type == "cuda": torch.cuda.empty_cache() # Clear VRAM after model use
+    if DEVICE.type == "cuda": torch.cuda.empty_cache()
 
     # Plot scores (using temp path names, but will be mapped to final names later)
     plot_scores_display_dict = {Path(k).name: v for k, v in segment_verification_scores_map.items()}
@@ -1218,14 +1277,12 @@ def slice_and_verify_target_solo_segments(
             temp_16k_path = Path(temp_16k_path_str)
             if not temp_16k_path.exists(): continue
 
-            # Get the corresponding high-quality segment
             hq_seg_path = high_quality_segments_map.get(temp_16k_path_str)
             if not hq_seg_path or not hq_seg_path.exists():
                 log.warning(f"High-quality version not found for {temp_16k_path.name}")
                 pb_finalize.update(task_finalize, advance=1)
                 continue
 
-            # Construct final segment name based on original segment times
             final_seg_name_base = temp_16k_path.stem.replace("solo_temp_verif", f"{safe_target_name_prefix}_solo_final")
             seg_validated = validated_by_temp_path.get(temp_16k_path_str, True)
 
@@ -1245,7 +1302,6 @@ def slice_and_verify_target_solo_segments(
                 rejected_filename = f"{final_seg_name_base}_score_{score:.3f}.wav"
                 rejected_seg_path = solo_segments_rejected_dir / rejected_filename
                 try:
-                    # Copy the high-quality version for rejected segments too
                     shutil.copy(hq_seg_path, rejected_seg_path)
                     if rejected_seg_path.exists() and rejected_seg_path.stat().st_size > 0:
                         final_rejected_solo_paths.append(rejected_seg_path)
@@ -1403,7 +1459,6 @@ def transcribe_segments(
              f"using ASR backend '{_backend_label}' (model '{_model_label}')...")
     if DEVICE.type == "cuda": torch.cuda.empty_cache()
     
-    # Ensure output directories exist
     ensure_dir_exists(output_transcripts_main_dir)
 
     # Select the ASR backend. Nemotron (default) loads+caches via the package helper;
@@ -1434,13 +1489,12 @@ def transcribe_segments(
     transcription_data_for_csv = []
     plain_text_transcript_lines = []
 
-    # Construct CSV/TXT output paths in the main transcript dir
     file_prefix = f"{safe_filename(target_name)}_{safe_filename(segment_type_tag)}"
     csv_path = output_transcripts_main_dir / f"{file_prefix}_transcripts.csv"
     txt_path = output_transcripts_main_dir / f"{file_prefix}_transcripts.txt"
 
     # Regex to parse start/end times from segment filenames like "target_solo_final_0000_0p123s_to_1p456s.wav"
-    time_pattern = re.compile(r"(\d+p\d+s)_to_(\d+p\d+)s") # Simpler, grabs the two time strings
+    time_pattern = re.compile(r"(\d+p\d+s)_to_(\d+p\d+)s")
 
     def get_sort_key_time(p: Path):
         try:
@@ -1501,7 +1555,6 @@ def transcribe_segments(
 
             pb.update(task, advance=1)
 
-    # Save consolidated CSV and TXT transcripts
     if transcription_data_for_csv:
         try:
             with csv_path.open("w", newline='', encoding="utf-8") as f_csv:
@@ -1537,7 +1590,7 @@ def concatenate_segments(
             match = time_pattern_concat.search(p.stem)
             if match:
                 start_time_str = match.group(1) # e.g. "0p123"
-                return float(start_time_str.replace('p', '.')) # Convert "0p123" to 0.123
+                return float(start_time_str.replace('p', '.'))
             log.debug(f"Could not parse start time from {p.name} for sorting concat list. Using 0.0 as sort key.")
             return 0.0 # Default sort key if pattern mismatch
         except Exception as e_sort:
@@ -1550,7 +1603,7 @@ def concatenate_segments(
     if silence_duration > 0:
         try:
             if not silence_file.exists() or silence_file.stat().st_size == 0:
-                channel_layout_str = 'mono' if output_channels_concat == 1 else 'stereo' # Adjust if more channels needed
+                channel_layout_str = 'mono' if output_channels_concat == 1 else 'stereo'
                 anullsrc_description = f"anullsrc=channel_layout={channel_layout_str}:sample_rate={output_sr_concat}"
                 (ffmpeg
                     .input(anullsrc_description, format='lavfi', t=str(silence_duration))
@@ -1644,7 +1697,6 @@ def classify_segments_for_noise(
         for segment_path in segment_paths:
             try:
                 results = classifier(str(segment_path))
-                # Find the score for the 'clean' label
                 clean_score = next((item['score'] for item in results if item['label'] == 'clean'), 0.0)
                 
                 if clean_score >= noise_threshold:
@@ -1711,7 +1763,4 @@ def run_separator_on_noisy_segments(
 
 if __name__ == '__main__':
     log.info("audio_pipeline.py executed directly. This script is intended to be imported as a module.")
-    # Add test calls here if needed for individual functions
     # Example:
-    # log.info(f"WeSpeaker available: {HAVE_WESPEAKER}")
-    # log.info(f"SpeechBrain available: {HAVE_SPEECHBRAIN}")

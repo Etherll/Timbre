@@ -16,7 +16,6 @@ from timbre import transcription as tx
 from timbre import runtime
 
 
-# --- chunk_spans (pure) ---------------------------------------------------------------- #
 def test_chunk_spans_empty():
     assert tx.chunk_spans(0, 100) == []
     assert tx.chunk_spans(-5, 100) == []
@@ -79,7 +78,6 @@ def test_resolve_chunk_cpu_uses_cpu_constant(restore_policy):
     assert tx.resolve_asr_chunk_sec() == tx.ASR_CHUNK_CPU_SEC
 
 
-# --- OOM classifier -------------------------------------------------------------------- #
 def test_is_cuda_oom_matches_only_oom_runtimeerror():
     assert tx._is_cuda_oom(RuntimeError("CUDA out of memory. Tried to allocate 23.95 GiB"))
     assert tx._is_cuda_oom(RuntimeError("cuDNN error: out of memory"))

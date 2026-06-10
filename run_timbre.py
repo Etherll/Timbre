@@ -24,13 +24,24 @@ import json
 import torch
 
 # Parse arguments FIRST to know what components are needed.
-# The 28-flag parser is defined once in timbre.cli (single source of truth);
+# The parser is defined once in timbre.cli (single source of truth);
 # importing it is lightweight and triggers no dependency bootstrapping, so `--help`
 # still works before any heavy import.
 from timbre.cli import build_parser
 
 parser = build_parser()
 args = parser.parse_args()
+
+# --- Early reference-path validation (T1 AC5): fail BEFORE any model loads ---
+# reference_audio is list[str] (nargs="+"); every path must exist up-front so the
+# user sees a clear FileNotFoundError rather than a cryptic model-level failure.
+for _early_ref in args.reference_audio:
+    _early_ref_p = Path(_early_ref)
+    if not _early_ref_p.is_file():
+        raise FileNotFoundError(
+            f"Reference audio file not found: {_early_ref_p}. "
+            "All --reference-audio paths must exist before processing begins."
+        )
 
 # --- Bootstrap Dependencies with component info ---
 try:
@@ -65,6 +76,7 @@ from timbre import runtime
 try:
     from audio_pipeline import (
         prepare_reference_audio,
+        check_input_bandwidth,
         run_vocal_separation,
         diarize_audio, detect_overlapped_regions,
         init_wespeaker_models, identify_target_speaker,
@@ -133,13 +145,13 @@ def main(args):
 
     # --- Validate Core Paths and Toolkits ---
     input_audio_p = Path(args.input_audio)
-    reference_audio_p = Path(args.reference_audio)
+    # reference_audio is now list[str] (nargs="+"); validate ALL paths before any model loads.
+    reference_audio_paths: list[Path] = [Path(p) for p in args.reference_audio]
     target_name_str = args.target_name
 
     if not input_audio_p.is_file():
         log.error(f"[bold red]Input audio file not found: {input_audio_p}. Exiting.[/]"); sys.exit(1)
-    if not reference_audio_p.is_file():
-        log.error(f"[bold red]Reference audio file not found: {reference_audio_p}. Exiting.[/]"); sys.exit(1)
+    # Reference paths were already validated at module level (before bootstrap).
     if not target_name_str.strip():
         log.error("[bold red]Target name cannot be empty. Exiting.[/]"); sys.exit(1)
 
@@ -152,7 +164,6 @@ def main(args):
     output_dir = Path(args.output_base_dir) / run_output_dir_name
     run_tmp_dir = output_dir / "__tmp_processing"
 
-    # Specific output subdirectories
     separated_vocals_dir = output_dir / "separated_vocals"
     segments_base_output_dir = output_dir / "target_segments_solo"
     transcripts_verified_dir = output_dir / "transcripts_solo_verified"
@@ -166,7 +177,8 @@ def main(args):
         ensure_dir_exists(dir_path)
 
     log.info(f"Processing input: [bold cyan]{input_audio_p.name}[/]")
-    log.info(f"Reference audio for '{target_name_str}': [bold cyan]{reference_audio_p.name}[/]")
+    _ref_names = ", ".join(p.name for p in reference_audio_paths)
+    log.info(f"Reference audio for '{target_name_str}' ({len(reference_audio_paths)} clip(s)): [bold cyan]{_ref_names}[/]")
     log.info(f"Run output directory: [bold cyan]{output_dir.resolve()}[/]")
     if args.dry_run: log.warning("[DRY-RUN MODE ENABLED] Processing will be limited.")
 
@@ -188,15 +200,20 @@ def main(args):
         log.warning(f"Preflight check raised unexpectedly ({e_pf_other}); continuing.")
 
     # --- RESUME: skip this input if a previous run already completed it (M1) ---
-    # The completed manifest lives under the output base dir and is keyed by (input, target),
-    # so re-running the same job is a no-op with --resume (default ON). --no-resume forces a
-    # full reprocess. Kept lightweight + fail-soft (a manifest error never blocks the run).
+    # The completed manifest lives under the output base dir and is keyed by
+    # (input, references, target), so re-running the same job is a no-op with --resume
+    # (default ON) while changing ANY of the three forces a fresh extraction. --no-resume
+    # forces a full reprocess. Kept lightweight + fail-soft (a manifest error never blocks
+    # the run).
     completed_manifest = None
-    _resume_key = f"{input_audio_p.resolve()}::{target_name_str}"
+    _resume_key = str(input_audio_p.resolve())
+    # reference_audio_paths is already validated and available at this point.
+    _resume_ref_paths = [str(p.resolve()) for p in reference_audio_paths]
     try:
         from timbre.dataset_export import CompletedManifest
         completed_manifest = CompletedManifest(Path(args.output_base_dir))
-        if getattr(args, "resume", True) and completed_manifest.is_done(_resume_key):
+        if getattr(args, "resume", True) and completed_manifest.is_done(
+                _resume_key, ref_paths=_resume_ref_paths, target=target_name_str):
             log.info(f"[bold green]✓ Resume: '{input_audio_p.name}' (target '{target_name_str}') "
                      f"is already marked completed; skipping. Use --no-resume to reprocess.[/]")
             return
@@ -264,12 +281,28 @@ def main(args):
             whisper_asr_model = None
 
     # --- STAGE 1: Prepare Reference Audio ---
+    # For multi-clip invocations (nargs="+") each clip is processed to 16kHz mono, then
+    # L2-normalized and averaged into a single ref_prototype vector so all downstream
+    # embedding comparisons use a single centroid (Candidate A from the plan).
+    # Single-clip behavior is unchanged: one clip -> L2-norm of its embedding == original.
     log.info("[bold magenta]== STAGE 1: Reference Audio Preparation ==[/]")
-    processed_reference_file = prepare_reference_audio(reference_audio_p, run_tmp_dir, target_name_str)
-    if not processed_reference_file.exists():
-        log.error(f"Failed to create processed reference file. Exiting."); sys.exit(1)
+    processed_reference_files: list[Path] = []
+    for _ref_src in reference_audio_paths:
+        _proc = prepare_reference_audio(_ref_src, run_tmp_dir, target_name_str)
+        if not _proc.exists():
+            log.error(f"Failed to create processed reference file for {_ref_src.name}. Exiting.")
+            sys.exit(1)
+        processed_reference_files.append(_proc)
+    # Canonical "processed reference file" for legacy call sites that expect a single path
+    # (spectrogram saving, stage 5 fallback). Always the first clip.
+    processed_reference_file = processed_reference_files[0]
     save_detailed_spectrograms(input_audio_p, visualizations_output_dir, "01_Original_InputAudio", target_name_str)
     save_detailed_spectrograms(processed_reference_file, visualizations_output_dir, "00_Processed_ReferenceAudio_16kMono", target_name_str)
+
+    # Build the reference embedding prototype (multi-clip L2-normalized mean).
+    # WeSpeaker models are not yet loaded here; we build the prototype lazily in
+    # get_wespeaker() scope after STAGE 0. Defer until after WeSpeaker init.
+    ref_prototype = None  # set after get_wespeaker() is first called (see STAGE 5)
 
     # --- STAGE 2: Vocal Separation (audio-separator) ---
     source_for_downstream = input_audio_p
@@ -290,6 +323,13 @@ def main(args):
             log.info("[bold yellow]Skipping initial separation because --classify-and-clean is active. audio-separator will be used later on noisy segments.[/]")
         else:
             log.info(f"Skipping separation. Using original input '{input_audio_p.name}' for diarization.")
+
+    # --- T4: Effective-bandwidth check (warn-only, before diarization) ---
+    # Loads the raw input once to estimate spectral rolloff; emits a logger.warning when the
+    # rolloff falls below 75% of Nyquist (see timbre/audio/math.py:BW_THRESHOLD_RATIO).
+    # Never raises; never alters pipeline behavior; result is recorded in the run summary.
+    bandwidth_limited: bool = check_input_bandwidth(input_audio_p)
+    log.info("bandwidth_limited: %s", bandwidth_limited)
 
     # --- STAGE 3: Speaker Diarization (NeMo Sortformer) ---
     log.info("[bold magenta]== STAGE 3: Speaker Diarization ==[/]")
@@ -325,12 +365,37 @@ def main(args):
     log.info(f"[bold magenta]== STAGE 5: Identifying Target Speaker ('{target_name_str}') ==[/]")
     # Lazily ensure WeSpeaker is loaded (a no-op under DEFAULT, where it was eager in STAGE 0).
     wespeaker_models = get_wespeaker()
+
+    # Build the multi-clip reference prototype now that WeSpeaker is available.
+    # Each processed reference clip is embedded, L2-normalized, and averaged into a single
+    # centroid vector. For a single clip this is equivalent to the original code:
+    # cosine similarity is magnitude-invariant, so L2-normalizing a single embedding
+    # before scoring leaves cosine scores byte-identical to the previous behavior.
+    if ref_prototype is None:
+        from timbre.audio.math import average_embeddings as _avg_emb
+        _raw_embeddings = []
+        for _proc_ref in processed_reference_files:
+            try:
+                _emb = wespeaker_models["rvector"].extract_embedding(str(_proc_ref))
+                _raw_embeddings.append(_emb)
+                log.debug(f"Extracted reference embedding from {_proc_ref.name}, shape: {_emb.shape}")
+            except Exception as _e_emb:
+                log.error(f"[bold red]Failed to extract embedding from reference clip '{_proc_ref.name}': {_e_emb}. Exiting.[/]")
+                sys.exit(1)
+        try:
+            ref_prototype = _avg_emb(_raw_embeddings)
+            log.info(f"Reference prototype built from {len(_raw_embeddings)} clip(s), shape: {ref_prototype.shape}")
+        except Exception as _e_proto:
+            log.error(f"[bold red]Failed to build reference embedding prototype: {_e_proto}. Exiting.[/]")
+            sys.exit(1)
+
     identified_target_label = identify_target_speaker(
         diarization_annotation,
         source_for_downstream,
         processed_reference_file,
         target_name_str,
-        wespeaker_models["rvector"]
+        wespeaker_models["rvector"],
+        ref_embedding=ref_prototype,
     )
     if not identified_target_label:
         log.error(f"[bold red]Failed to identify target speaker '{target_name_str}' in the audio. Exiting.[/]"); sys.exit(1)
@@ -390,6 +455,7 @@ def main(args):
         vad_model_dir=getattr(args, "vad_model_dir", None),
         max_clips_per_file=int(getattr(args, "max_clips_per_file", 10000)),
         embedder=embedder,
+        ref_embedding=ref_prototype,
     )
     # F1: the REAL per-clip word-safety flags (keyed by final clip stem == dataset clip_id),
     # stashed on the function so STAGE 7.5 can quarantine force-split / VAD-unvalidated clips.
@@ -412,7 +478,6 @@ def main(args):
         ensure_dir_exists(noisy_originals_dir)
         ensure_dir_exists(cleaned_by_separator_dir)
 
-        # Move files and update path lists
         final_clean_paths = []
         for p in initially_clean_paths:
             dest = clean_verified_dir / p.name
@@ -477,7 +542,7 @@ def main(args):
         from timbre import transcription as _asr_mod
         _asr_mod.unload()
         whisper_asr_model = None
-        runtime.free_model()  # drops the whisper handle dropped above; gc + empty_cache
+        runtime.free_model()
         log.info(f"[cyan]Freed ASR model after STAGE 7. {runtime.vram_snapshot()}[/]")
 
     # --- STAGE 7.5: Write the LJSpeech TTS dataset (default ON; --no-export-tts opts out) ---
@@ -486,6 +551,7 @@ def main(args):
     #   <output_dir>/dataset/metadata.csv            (id|transcript|normalized_transcript)
     #   (+ metadata.jsonl/train.csv/eval.csv when --dataset-format includes jsonl / always split)
     # Pure soundfile/csv/numpy — no models, never interactive, never aborts the run on a bad clip.
+    ds_summary: dict = {}  # populated by build_and_write_dataset; always carries bandwidth_limited
     if getattr(args, "export_tts", True) and verified_solo_paths:
         log.info(f"[bold magenta]== STAGE 7.5: Writing LJSpeech TTS dataset ('{target_name_str}') ==[/]")
         try:
@@ -532,6 +598,9 @@ def main(args):
                 log.exception("Traceback for TTS dataset export failure:")
     elif getattr(args, "export_tts", True):
         log.info(f"No verified solo segments of '{target_name_str}' — skipping TTS dataset export.")
+    # T4 AC8: bandwidth_limited is always present in the run summary dict regardless of whether
+    # the TTS export ran, was skipped (no verified segments), or failed with an exception.
+    ds_summary["bandwidth_limited"] = bandwidth_limited
 
     # --- STAGE 8: Concatenate VERIFIED SOLO Segments ---
     log.info(f"[bold magenta]== STAGE 8: Concatenating VERIFIED SOLO Segments ('{target_name_str}') ==[/]")
@@ -576,6 +645,7 @@ def main(args):
     if completed_manifest is not None:
         try:
             completed_manifest.mark(_resume_key, status="done",
+                                    ref_paths=_resume_ref_paths,
                                     target=target_name_str,
                                     output_dir=str(output_dir.resolve()),
                                     n_verified=len(verified_solo_paths))

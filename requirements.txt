@@ -30,6 +30,8 @@ pyyaml
 scipy
 onnx
 onnxruntime
+pyloudnorm>=0.2.0           # ITU-R BS.1770-4 loudness normalization (used in dataset_export.py)
+soxr>=1.1.0                 # High-quality resampler; also used for true-peak 4× oversampling
 
 # WeSpeaker — speaker identification / verification (auto-installed from git)
 wespeaker @ git+https://github.com/wenet-e2e/wespeaker.git

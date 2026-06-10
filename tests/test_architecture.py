@@ -13,9 +13,7 @@ from timbre.pipeline import Orchestrator, PipelineContext, Stage
 from timbre.pipeline.default_pipeline import build_default_stages
 
 
-# --------------------------------------------------------------------------- #
 # config
-# --------------------------------------------------------------------------- #
 def _config(**overrides) -> ExtractorConfig:
     args = build_parser().parse_args(["-i", "in.wav", "-r", "ref.wav", "-n", "Alice"])
     cfg = ExtractorConfig.from_args(args)
@@ -26,7 +24,7 @@ def _config(**overrides) -> ExtractorConfig:
 
 def test_config_from_args_maps_required_and_defaults():
     cfg = _config()
-    assert (cfg.input_audio, cfg.reference_audio, cfg.target_name) == ("in.wav", "ref.wav", "Alice")
+    assert (cfg.input_audio, cfg.reference_audio, cfg.target_name) == ("in.wav", ["ref.wav"], "Alice")
     assert cfg.output_sr == 44100
     assert cfg.merge_gap == 0.25
     assert cfg.verification_threshold == 0.7
@@ -34,9 +32,7 @@ def test_config_from_args_maps_required_and_defaults():
     assert cfg.use_separation is True and cfg.use_speechbrain is True
 
 
-# --------------------------------------------------------------------------- #
 # model registry — the "add a backend" seam
-# --------------------------------------------------------------------------- #
 def test_registry_lists_existing_backends_without_invoking_them():
     import timbre.models.backends  # noqa: F401  (registers on import)
     from timbre.models import available, get_factory
@@ -57,9 +53,7 @@ def test_registry_unknown_backend_raises():
         get_factory("diarizer", "nope")
 
 
-# --------------------------------------------------------------------------- #
 # default pipeline — order + gating
-# --------------------------------------------------------------------------- #
 def test_default_pipeline_order():
     names = [s.name for s in build_default_stages(_config())]
     assert names == [
@@ -94,9 +88,7 @@ def test_classify_and_clean_gating():
     assert _gate("classify_and_clean", _config(classify_and_clean=True)) is True
 
 
-# --------------------------------------------------------------------------- #
 # orchestrator honors should_run
-# --------------------------------------------------------------------------- #
 def test_orchestrator_skips_gated_out_stages():
     ran: list[str] = []
 

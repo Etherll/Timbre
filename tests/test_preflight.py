@@ -65,9 +65,7 @@ def _all_present(pf, monkeypatch):
     monkeypatch.setattr(pf, "check_free_disk", lambda out, floor: (9999.0, True))
 
 
-# --------------------------------------------------------------------------- #
 # PASS path
-# --------------------------------------------------------------------------- #
 def test_run_preflight_passes_when_all_required_present(pf, monkeypatch):
     _all_present(pf, monkeypatch)
     report = pf.run_preflight(_base_cfg(), require_ffmpeg=True, min_free_gb=1.0)
@@ -81,9 +79,7 @@ def test_preflight_or_abort_returns_report_when_clean(pf, monkeypatch):
     assert report.ok is True
 
 
-# --------------------------------------------------------------------------- #
 # REQUIRED miss -> loud abort BEFORE batch
-# --------------------------------------------------------------------------- #
 def test_missing_required_ffmpeg_records_error(pf, monkeypatch):
     import shutil
 
@@ -113,9 +109,7 @@ def test_missing_required_vad_dir_aborts(pf, monkeypatch):
         pf.preflight_or_abort(_base_cfg(), require_ffmpeg=True, min_free_gb=1.0)
 
 
-# --------------------------------------------------------------------------- #
 # OPTIONAL tiers auto-disable (never raise) when their lib is absent
-# --------------------------------------------------------------------------- #
 def test_optional_word_align_auto_disables_when_nemo_absent(pf, monkeypatch):
     import shutil
 

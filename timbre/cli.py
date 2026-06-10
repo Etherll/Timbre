@@ -1,7 +1,7 @@
 """
 Command-line surface for Timbre.
 
-`build_parser()` is the single source of truth for the 28 CLI flags. `python
+`build_parser()` is the single source of truth for the CLI flags. `python
 run_timbre.py --help` is a frozen contract guarded by tests/golden/cli_help.txt. This
 module imports only stdlib — importing it has no heavy side effects, so `--help` never
 triggers dependency bootstrapping.
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Required Arguments
     req_group = parser.add_argument_group('Required Arguments')
     req_group.add_argument("--input-audio", "-i", type=str, required=True, help="Path to the main input audio file.")
-    req_group.add_argument("--reference-audio", "-r", type=str, required=True, help="Path to a clean reference audio clip of the target speaker (for speaker ID/verification).")
+    req_group.add_argument("--reference-audio", "-r", nargs="+", required=True, metavar="PATH", help="One or more paths to clean reference audio clips of the target speaker (for speaker ID/verification). Multiple clips are L2-normalized and averaged into a single embedding prototype.")
     req_group.add_argument("--target-name", "-n", type=str, required=True, help="A name for the target speaker.")
 
     # Path and Output Arguments

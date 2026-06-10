@@ -129,10 +129,8 @@ def test_every_function_that_reads_and_assigns_DEVICE_declares_it_global():
     )
 
 
-# --------------------------------------------------------------------------- #
 # Meta-test: prove the symtable check has teeth using synthetic source strings.
 # (No production source is touched; these strings are analyzed in-memory.)
-# --------------------------------------------------------------------------- #
 def _device_is_global_in_main(source: str) -> bool:
     """Return True iff DEVICE resolves to the module-global inside main() of `source`."""
     top = symtable.symtable(source, "<synthetic>", "exec")

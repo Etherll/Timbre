@@ -9,9 +9,7 @@ from __future__ import annotations
 import pytest
 
 
-# --------------------------------------------------------------------------- #
 # format_duration  (common.py:552)  ->  "HH:MM:SS.mmm", milliseconds TRUNCATED
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "seconds, expected",
     [
@@ -28,9 +26,7 @@ def test_format_duration(common_mod, seconds, expected):
     assert common_mod.format_duration(seconds) == expected
 
 
-# --------------------------------------------------------------------------- #
 # safe_filename  (common.py:559)
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "raw, expected",
     [
@@ -56,9 +52,7 @@ def test_safe_filename_strips_control_chars(common_mod):
     assert common_mod.safe_filename("ab\x00\x1fcd") == "abcd"
 
 
-# --------------------------------------------------------------------------- #
 # cos  (common.py:454)  cosine similarity with zero-norm guard
-# --------------------------------------------------------------------------- #
 def test_cos_identical_vectors_is_one(common_mod, np):
     assert common_mod.cos(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])) == pytest.approx(1.0)
 
@@ -76,9 +70,7 @@ def test_cos_zero_vector_returns_zero_not_nan(common_mod, np):
     assert common_mod.cos(np.array([0.0, 0.0]), np.array([1.0, 1.0])) == 0.0
 
 
-# --------------------------------------------------------------------------- #
 # to_mono  (common.py:447)
-# --------------------------------------------------------------------------- #
 def test_to_mono_averages_stereo_channels(common_mod, np):
     stereo = np.array([[0.0, 2.0], [4.0, 6.0]])  # shape (2, 2)
     out = common_mod.to_mono(stereo)

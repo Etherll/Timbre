@@ -19,9 +19,7 @@ from timbre import separation as sep
 from timbre import vad
 
 
-# --------------------------------------------------------------------------- #
 # diarization: NeMo segments -> Annotation, and overlap derivation
-# --------------------------------------------------------------------------- #
 def test_normalize_segments_accepts_rttm_strings():
     segs = diar.normalize_segments(["0.00 5.00 speaker_0", "3.0 8.0 speaker_1"])
     assert segs == [(0.0, 5.0, "speaker_0"), (3.0, 8.0, "speaker_1")]
@@ -74,9 +72,7 @@ def test_overlap_empty_when_no_simultaneous_speakers():
     assert len(diar.overlap_from_diarization(ann)) == 0
 
 
-# --------------------------------------------------------------------------- #
 # separation: vocals-stem selection
-# --------------------------------------------------------------------------- #
 def test_select_vocals_stem_prefers_vocals_tag():
     files = [
         "song_(Instrumental)_UVR-MDX-NET-Inst_HQ_3.wav",
@@ -101,9 +97,7 @@ def test_select_vocals_stem_none_when_absent():
     assert sep.select_vocals_stem([]) is None
 
 
-# --------------------------------------------------------------------------- #
 # vad: speech ratio
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "timestamps, total, expected",
     [

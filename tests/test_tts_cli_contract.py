@@ -84,9 +84,7 @@ def help_result():
     return _run(["--help"])
 
 
-# --------------------------------------------------------------------------- #
 # 1. Backward-compat: the existing 32 flags are UNCHANGED (do not weaken)
-# --------------------------------------------------------------------------- #
 def test_help_exits_zero(help_result):
     assert help_result.returncode == 0, (
         f"--help exited {help_result.returncode}\nstderr:\n{help_result.stderr}"
@@ -127,9 +125,7 @@ def test_existing_golden_lines_are_a_subset_of_help(help_result):
         assert flag in help_result.stdout, f"{flag} missing -- golden contract weakened"
 
 
-# --------------------------------------------------------------------------- #
 # 2. Additive: the new word-safe / TTS flags appear in --help
-# --------------------------------------------------------------------------- #
 def test_export_sample_rate_flag_present(help_result):
     """The TTS-export SR knob exists under --dataset-sr OR --tts-sr."""
     assert help_result.returncode == 0

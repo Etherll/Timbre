@@ -17,7 +17,7 @@ class ExtractorConfig:
 
     # Required
     input_audio: str
-    reference_audio: str
+    reference_audio: list[str]
     target_name: str
 
     # Paths / output

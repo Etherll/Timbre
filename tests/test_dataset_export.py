@@ -86,7 +86,6 @@ def _read_metadata(out_dir) -> list[list[str]]:
     return rows
 
 
-# --------------------------------------------------------------------------- #
 def test_metadata_csv_is_pipe_delimited_three_columns(dx, clip_specs, tmp_path):
     dx.write_ljspeech(_records(dx, clip_specs), tmp_path, tts_sr=EXPORT_SR)
     rows = _read_metadata(tmp_path)
@@ -197,3 +196,187 @@ def test_completed_manifest_skips_done_inputs(dx, tmp_path):
     other = tmp_path / "video_002.wav"
     other.write_bytes(b"\x00")
     assert cm2.is_done(other) is False, "unprocessed input wrongly reported done"
+
+
+# T1 — CompletedManifest ref-hash (OQ-R4 option a)
+def test_completed_manifest_ref_hash_different_refs_not_done(dx, tmp_path):
+    """mark(input, refs=A) then is_done(input, refs=B) must return False (ref-hash in key)."""
+    cm_cls = getattr(dx, "CompletedManifest", None)
+    if cm_cls is None:
+        pytest.skip("CompletedManifest not present (impl-mismatch)")
+    src = tmp_path / "video.wav"
+    ref_a = tmp_path / "ref_a.wav"
+    ref_b = tmp_path / "ref_b.wav"
+    src.write_bytes(b"\x00")
+    ref_a.write_bytes(b"\x00")
+    ref_b.write_bytes(b"\x00")
+
+    cm = cm_cls(tmp_path)
+    cm.mark(src, status="done", clips=3, ref_paths=[str(ref_a)])
+    # Same refs -> done.
+    assert cm.is_done(src, ref_paths=[str(ref_a)]) is True
+    # Different refs -> not done (changing the reference set invalidates the cache key).
+    assert cm.is_done(src, ref_paths=[str(ref_b)]) is False, (
+        "is_done returned True after marking with different reference paths — "
+        "ref-path hash is not included in the manifest key"
+    )
+
+
+# T5 — normalize_transcript: ordinals (1st–20th), title abbreviations, edge cases
+@pytest.mark.parametrize("inp,expected", [
+    # Ordinals 1st–20th (AC 5.1)
+    ("She finished 1st", "She finished first"),
+    ("The 2nd place finisher", "The second place finisher"),
+    ("His 3rd attempt succeeded", "His third attempt succeeded"),
+    ("The 4th of July", "The fourth of July"),
+    ("A 10th anniversary", "A tenth anniversary"),
+    ("The 20th episode", "The twentieth episode"),
+    # Ordinals above 20th left as-is (conservative mandate)
+    ("The 21st episode", "The 21st episode"),
+    ("A 100th celebration", "A 100th celebration"),
+    # Title abbreviations (AC 5.2)
+    ("Dr. Smith said hello", "Doctor Smith said hello"),
+    ("Mr. Jones arrived", "Mister Jones arrived"),
+    ("Mrs. Brown left", "Missus Brown left"),
+    ("Ms. Taylor called", "Miss Taylor called"),
+    ("Prof. White explained", "Professor White explained"),
+    # St. excluded — ambiguous (AC 5.3)
+    ("St. Paul's Cathedral", "St. Paul's Cathedral"),
+    # Large cardinals unchanged (AC 5.4)
+    ("15000 items", "15000 items"),
+    ("10000 records processed", "10000 records processed"),
+    # Year expansion NOT implemented (AC 5.5) — treated as integer; 9999 cap means >9999 unchanged
+    ("Yamaha 2000 model", "Yamaha two thousand model"),
+])
+def test_normalize_transcript_t5_vectors(dx, inp, expected):
+    """Pinned test vectors for T5 normalizer changes (ordinals + abbreviations)."""
+    assert dx.normalize_transcript(inp) == expected, (
+        f"normalize_transcript({inp!r}) != {expected!r}"
+    )
+
+
+@pytest.mark.parametrize("inp,expected", [
+    # OQ-R3 option (b): document and pin current behavior for edge cases.
+    # The existing \\b\\d+\\b regex expands digit components; no guards added.
+    # These vectors are intentionally pinned to CURRENT behavior so any future
+    # change to these edge cases surfaces as a test failure (not a silent regression).
+    ("v2 scored 3.5", "v2 scored three.five"),
+    ("10:30 AM", "ten:thirty AM"),
+    ("version 2.0 release", "version two.zero release"),
+])
+def test_normalize_transcript_oq_r3_pinned_edge_cases(dx, inp, expected):
+    """OQ-R3 option (b): pinned edge-case vectors — expand digit components, no guards.
+
+    These are documented known limitations. Any change to behavior must update these
+    vectors explicitly so the change is a conscious decision, not a silent regression.
+    """
+    assert dx.normalize_transcript(inp) == expected, (
+        f"normalize_transcript({inp!r}) == {dx.normalize_transcript(inp)!r}, "
+        f"expected {expected!r} (OQ-R3 pinned edge case — update intentionally if behavior changes)"
+    )
+
+
+# T6 — true-peak measurement via soxr 4x oversampling
+def _make_inter_sample_peaking_signal(sr: int = 16000) -> np.ndarray:
+    """4800 Hz tone whose sample peak is -1.5 dBFS but 4x true peak is above -1.0 dBFS.
+
+    A 4800 Hz sine at sr=16000 samples the waveform at a phase where consecutive
+    samples are not near the waveform's amplitude peak.  4x oversampling reveals the
+    true sinusoidal peak, which is ~1 dB above the largest sampled value at this
+    frequency/sample-rate combination (empirically verified: sample=-1.5 dBFS,
+    true~-0.5 dBFS).
+    """
+    t = np.arange(sr, dtype=np.float32) / sr
+    tone = np.sin(2 * np.pi * 4800 * t).astype(np.float32)
+    sample_max = float(np.max(np.abs(tone)))
+    # Scale so sample peak = -1.5 dBFS
+    target_sample_db = -1.5
+    tone = tone * (10.0 ** (target_sample_db / 20.0) / sample_max)
+    return tone
+
+
+def test_true_peak_rejects_inter_sample_peaking_signal(dx):
+    """Inter-sample peaking signal: sample peak < -1 dBFS passes old code, fails new code.
+
+    AC 6.1: passes_quality() returns (False, {'true_peak_exceeds': ...}) for a signal
+    whose sample peak is -1.5 dBFS (below -1.0 dBTP threshold) but whose 4x-oversampled
+    true peak exceeds -1.0 dBTP.
+    """
+    soxr = pytest.importorskip("soxr", reason="soxr required for true-peak tests")
+    audio = _make_inter_sample_peaking_signal(sr=16000)
+
+    sample_peak_dbfs = 20.0 * float(np.log10(np.max(np.abs(audio)) + 1e-10))
+    assert sample_peak_dbfs < -1.0, (
+        f"signal setup error: sample peak {sample_peak_dbfs:.2f} dBFS is not below -1.0"
+    )
+
+    ovr = soxr.resample(audio, 16000, 16000 * 4, quality="HQ")
+    true_peak_dbfs = 20.0 * float(np.log10(np.max(np.abs(ovr)) + 1e-10))
+    assert true_peak_dbfs > -1.0, (
+        f"signal setup error: true peak {true_peak_dbfs:.2f} dBFS is not above -1.0"
+    )
+
+    t = dx.QualityThresholds(min_dur=0.0, max_true_peak_dbfs=-1.0)
+    ok, reasons = dx.passes_quality(None, wav=audio, sr=16000, t=t)
+    assert ok is False, "passes_quality accepted a signal with inter-sample true peak > -1.0 dBTP"
+    assert "true_peak_exceeds" in reasons, (
+        f"passes_quality rejected but reason was not 'true_peak_exceeds': {reasons}"
+    )
+
+
+def test_clipping_path_still_rejects(dx):
+    """AC 6.2: clipping rejection (sample >= 0.999969) still triggers — no regression."""
+    clipping_audio = np.ones(16000, dtype=np.float32)  # full-scale = 0 dBFS
+    t = dx.QualityThresholds(min_dur=0.0, reject_clipping=True)
+    ok, reasons = dx.passes_quality(None, wav=clipping_audio, sr=16000, t=t)
+    assert ok is False
+    assert "clipping" in reasons, f"Expected 'clipping' in reasons, got {reasons}"
+
+
+def test_loudness_normalize_output_true_peak_stays_within_limit(dx):
+    """AC 6.3: _loudness_normalize output measured at 4x stays <= -1.0 dBTP."""
+    soxr = pytest.importorskip("soxr", reason="soxr required for true-peak tests")
+    pytest.importorskip("pyloudnorm", reason="pyloudnorm required for loudness normalize tests")
+    # Use the inter-sample peaking signal — after gain application this is a stress case.
+    audio = _make_inter_sample_peaking_signal(sr=16000)
+    result = dx._loudness_normalize(audio, 16000, target_lufs=-23.0)
+    ovr = soxr.resample(result, 16000, 16000 * 4, quality="HQ")
+    true_peak = 20.0 * float(np.log10(np.max(np.abs(ovr)) + 1e-10))
+    assert true_peak <= -1.0, (
+        f"_loudness_normalize output has true peak {true_peak:.3f} dBTP > -1.0 dBTP limit"
+    )
+
+
+def test_soxr_missing_fallback_warns_and_continues(dx, monkeypatch, caplog):
+    """AC 6.4: soxr unavailable -> falls back to sample peak with logger.warning, no raise.
+
+    The warning text "true-peak measurement unavailable" must appear at WARNING level so
+    the fallback is observable in logs — a silent fallback would fail AC 6.4.
+
+    true_peak_dbfs uses a lazy ``try: import soxr`` inside the function body, so there
+    is no module-level attribute to patch.  The correct way to simulate absence for a
+    lazy import is to set ``sys.modules["soxr"] = None``, which Python treats as a
+    negative-cache entry and raises ImportError on the next ``import soxr`` attempt.
+    monkeypatch.setitem restores the original entry automatically after the test.
+    """
+    import logging
+    import sys
+
+    monkeypatch.setitem(sys.modules, "soxr", None)  # type: ignore[arg-type]
+
+    audio = np.ones(1000, dtype=np.float32) * 0.5
+    with caplog.at_level(logging.WARNING, logger="timbre.dataset_export"):
+        result = dx.true_peak_dbfs(audio, 16000)
+
+    # Must not raise — fallback value should be sample-peak: 0.5 -> ~-6.02 dBFS
+    expected_approx = 20.0 * float(np.log10(0.5 + 1e-10))
+    assert abs(result - expected_approx) < 1.0, (
+        f"true_peak_dbfs fallback value {result:.3f} dBFS unexpected (expected ~{expected_approx:.3f})"
+    )
+
+    # DA-15: the warning MUST fire — a silent fallback fails AC 6.4
+    warning_texts = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("true-peak measurement unavailable" in str(m) for m in warning_texts), (
+        f"Expected 'true-peak measurement unavailable' WARNING from timbre.dataset_export. "
+        f"Captured WARNING records: {warning_texts}"
+    )

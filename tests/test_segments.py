@@ -16,9 +16,7 @@ def _spans(segments):
     return [(round(s.start, 6), round(s.end, 6)) for s in segments]
 
 
-# --------------------------------------------------------------------------- #
 # merge_nearby_segments  (audio_pipeline.py:902)
-# --------------------------------------------------------------------------- #
 def test_merge_empty_returns_empty(ap):
     assert ap.merge_nearby_segments([], 0.25) == []
 
@@ -48,9 +46,7 @@ def test_merge_sorts_unsorted_input(ap):
     assert _spans(out) == [(0.0, 2.0), (5.0, 6.0)]
 
 
-# --------------------------------------------------------------------------- #
 # filter_segments_by_duration  (audio_pipeline.py:927)
-# --------------------------------------------------------------------------- #
 def test_filter_drops_short_keeps_long(ap):
     out = ap.filter_segments_by_duration([Segment(0.0, 0.5), Segment(0.0, 1.5)], 1.0)
     assert _spans(out) == [(0.0, 1.5)]
@@ -62,9 +58,7 @@ def test_filter_min_duration_boundary_is_inclusive(ap):
     assert _spans(out) == [(0.0, 1.0)]
 
 
-# --------------------------------------------------------------------------- #
 # get_target_solo_timeline  (audio_pipeline.py:1054)
-# --------------------------------------------------------------------------- #
 def test_solo_timeline_extrudes_overlap_from_target(ap):
     ann = Annotation()
     ann[Segment(0.0, 5.0)] = "SPK_TARGET"
@@ -81,9 +75,7 @@ def test_solo_timeline_missing_label_returns_empty(ap):
     assert len(solo) == 0
 
 
-# --------------------------------------------------------------------------- #
 # Overlap detection
-# --------------------------------------------------------------------------- #
 # The old OSD-label heuristic (_overlap_timeline_from_annotation) was removed in the
 # model-stack migration: overlap is now derived directly from the diarization via
 # timbre.diarization.overlap_from_diarization (Annotation.get_overlap()). Those

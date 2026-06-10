@@ -1,5 +1,5 @@
-usage: run_timbre.py [-h] --input-audio INPUT_AUDIO --reference-audio
-                     REFERENCE_AUDIO --target-name TARGET_NAME
+usage: run_timbre.py [-h] --input-audio INPUT_AUDIO --reference-audio PATH
+                     [PATH ...] --target-name TARGET_NAME
                      [--output-base-dir OUTPUT_BASE_DIR]
                      [--output-sr OUTPUT_SR]
                      [--separator-model SEPARATOR_MODEL]
@@ -51,9 +51,11 @@ options:
 Required Arguments:
   --input-audio INPUT_AUDIO, -i INPUT_AUDIO
                         Path to the main input audio file. (default: None)
-  --reference-audio REFERENCE_AUDIO, -r REFERENCE_AUDIO
-                        Path to a clean reference audio clip of the target
-                        speaker (for speaker ID/verification). (default: None)
+  --reference-audio PATH [PATH ...], -r PATH [PATH ...]
+                        One or more paths to clean reference audio clips of
+                        the target speaker (for speaker ID/verification).
+                        Multiple clips are L2-normalized and averaged into a
+                        single embedding prototype. (default: None)
   --target-name TARGET_NAME, -n TARGET_NAME
                         A name for the target speaker. (default: None)
 

@@ -255,8 +255,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[3/3] {'Planned' if args.list_only else 'Wrote'} {len(rows) if args.list_only else exported} "
           f"clip(s) + manifest → {out_dir.resolve()}")
-    print("Done. Pick the cleanest single-speaker clip and pass it to run_timbre.py "
-          "with --reference-audio. (No pipeline was run.)")
+    print("Done. Pick the cleanest single-speaker clip(s) and pass them to run_timbre.py "
+          "with --reference-audio (accepts one or more paths for multi-clip averaging). "
+          "(No pipeline was run.)")
     return 0
 
 

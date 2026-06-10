@@ -35,6 +35,7 @@ __all__ = [
     "QualityThresholds",
     "passes_quality",
     "normalize_transcript",
+    "true_peak_dbfs",
     "write_ljspeech",
     "CompletedManifest",
     "read_transcript_map",
@@ -164,13 +165,19 @@ def passes_quality(
         reasons["not_verified"] = True
 
     # (4) clipping / true-peak
+    # The clipping check (>= 0.999969) stays sample-domain — it detects hard-clip artifacts
+    # in the raw samples themselves, independent of inter-sample overshoot.
+    # The max_true_peak_dbfs check uses 4x-oversampled true peak so that inter-sample
+    # peaks (up to ~3 dB above sample peak) are correctly measured before rejection.
     if len(audio):
         peak = float(np.max(np.abs(audio)))
         peak_dbfs = 20.0 * np.log10(peak + 1e-10)
-        if t.reject_clipping and peak >= 0.999969:  # >= -0.0003 dBFS ~ full-scale
+        if t.reject_clipping and peak >= 0.999969:  # >= -0.0003 dBFS ~ full-scale (sample-domain)
             reasons["clipping"] = round(peak_dbfs, 3)
-        elif peak_dbfs > t.max_true_peak_dbfs:
-            reasons["true_peak_exceeds"] = round(peak_dbfs, 3)
+        else:
+            tp_dbfs = true_peak_dbfs(audio, a_sr) if a_sr else peak_dbfs
+            if tp_dbfs > t.max_true_peak_dbfs:
+                reasons["true_peak_exceeds"] = round(tp_dbfs, 3)
     else:
         reasons["empty_audio"] = True
 
@@ -202,6 +209,28 @@ _SMALL_NUMBERS = {
     50: "fifty", 60: "sixty", 70: "seventy", 80: "eighty", 90: "ninety",
 }
 
+# Abbreviation map for pass-1 of normalize_transcript (word-boundary substitution).
+# St. is intentionally excluded: it is ambiguous (saint vs. street).
+# vs./etc. are also excluded (confirmed out-of-scope per OQ-3).
+_ABBREVIATIONS: dict[str, str] = {
+    r"Dr\.": "Doctor",
+    r"Mr\.": "Mister",
+    r"Mrs\.": "Missus",
+    r"Ms\.": "Miss",
+    r"Prof\.": "Professor",
+}
+
+# Ordinal suffix pattern: matches 1st–20th only (21st+ left as digits per plan).
+_ORDINAL_RE = re.compile(r"\b(\d{1,2})(st|nd|rd|th)\b")
+
+# Ordinal words for 1..20.
+_ORDINALS: dict[int, str] = {
+    1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+    6: "sixth", 7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth",
+    11: "eleventh", 12: "twelfth", 13: "thirteenth", 14: "fourteenth", 15: "fifteenth",
+    16: "sixteenth", 17: "seventeenth", 18: "eighteenth", 19: "nineteenth", 20: "twentieth",
+}
+
 
 def _int_to_words(n: int) -> str:
     """Minimal integer-to-words for 0..9999 (TTS normalization helper; deterministic)."""
@@ -221,17 +250,47 @@ def _int_to_words(n: int) -> str:
     return head if rem == 0 else head + " " + _int_to_words(rem)
 
 
-def normalize_transcript(text: str) -> str:
-    """Deterministic TTS text normalization: integers->words, whitespace/punctuation cleanup.
+def _ordinal_to_words(n: int) -> str | None:
+    """Return the ordinal word for 1..20, or None if out of range (caller leaves as-is).
 
-    Conservative on purpose (the canonical transcript stays in the raw ``transcript`` column):
-    expands standalone integers 0..9999, collapses whitespace, strips control chars. Larger
-    numbers / currency are left as digits to avoid wrong expansions.
+    Mirrors the style of _int_to_words: deterministic, no side effects.
+    """
+    return _ORDINALS.get(n)
+
+
+def normalize_transcript(text: str) -> str:
+    """Deterministic TTS text normalization: abbreviations, ordinals, integers->words, cleanup.
+
+    Pass order (each pass is non-overlapping with the next):
+      1. Abbreviation substitution — Dr./Mr./Mrs./Ms./Prof. -> spoken forms (word-boundary
+         regex; St. excluded as ambiguous; vs./etc. excluded as out-of-scope).
+      2. Ordinal expansion — 1st..20th -> first..twentieth (regex guarded to 1..20;
+         21st+ left as-is). Must run BEFORE the plain-integer pass because ordinals contain
+         no standalone \\b\\d+\\b match (the suffix letter breaks the word boundary).
+      3. Integer expansion — standalone 0..9999 -> words; larger numbers left as digits.
+      4. Whitespace collapse — internal runs -> single space, strip leading/trailing.
+
+    Conservative on purpose: the canonical transcript stays in the raw ``transcript`` column.
+    Known limitations: decimal/version/time strings (e.g. "v2", "3.5", "10:30") may expand
+    their digit components — this is documented behaviour (OQ-R3 option b; no guards added).
     """
     if not text:
         return ""
     s = text.strip()
 
+    # Pass 1: abbreviations (before any digit pass — no digits involved).
+    for pattern, replacement in _ABBREVIATIONS.items():
+        s = re.sub(r"\b" + pattern, replacement, s)
+
+    # Pass 2: ordinals 1st–20th -> words (before plain-integer pass).
+    def _ordinal_repl(m: "re.Match[str]") -> str:
+        val = int(m.group(1))
+        word = _ordinal_to_words(val)
+        return word if word is not None else m.group(0)  # 21st+ unchanged
+
+    s = _ORDINAL_RE.sub(_ordinal_repl, s)
+
+    # Pass 3: plain integers 0..9999 -> words (unchanged from original).
     def repl(m: "re.Match[str]") -> str:
         digits = m.group(0)
         try:
@@ -243,6 +302,8 @@ def normalize_transcript(text: str) -> str:
         return digits
 
     s = re.sub(r"\b\d+\b", repl, s)
+
+    # Pass 4: whitespace collapse.
     s = _WS_RE.sub(" ", s).strip()
     return s
 
@@ -279,9 +340,31 @@ class CompletedManifest:
         self._load()
 
     @staticmethod
-    def _key(input_path: str | Path) -> str:
+    def _key(
+        input_path: str | Path,
+        ref_paths: list[str | Path] | None = None,
+        target: str | None = None,
+    ) -> str:
+        """Stable key combining input path + sorted reference paths + target name (R4/F1).
+
+        Including a short hash of the sorted reference paths ensures that a re-run with a
+        different reference set is NOT skipped; including the target name ensures two runs
+        on the same audio extracting DIFFERENT speakers do not collide (F1). Old entries
+        (keyed on fewer components) will simply never match the new compound key — they
+        stay in .completed.json but are effectively stale. This is acceptable:
+        re-processing is safe; silent skips are not.
+        """
         norm = str(Path(input_path).resolve()).lower()
-        return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
+        # Normalise and sort reference paths so order-invariance is preserved.
+        if ref_paths:
+            sorted_refs = "|".join(
+                sorted(str(Path(r).resolve()).lower() for r in ref_paths)
+            )
+        else:
+            sorted_refs = ""
+        target_norm = (target or "").strip().lower()
+        payload = f"{norm}\x00{sorted_refs}\x00{target_norm}"
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
     def _load(self) -> None:
         if self.path.exists():
@@ -291,16 +374,31 @@ class CompletedManifest:
                 logger.warning("Completed-manifest unreadable (%s); starting fresh.", e)
                 self._data = {}
 
-    def is_done(self, input_path: str | Path) -> bool:
-        rec = self._data.get(self._key(input_path))
+    def is_done(
+        self,
+        input_path: str | Path,
+        ref_paths: list[str | Path] | None = None,
+        target: str | None = None,
+    ) -> bool:
+        rec = self._data.get(self._key(input_path, ref_paths, target))
         return bool(rec and rec.get("status") == "done")
 
-    def mark(self, input_path: str | Path, status: str = "done", **extra) -> None:
-        self._data[self._key(input_path)] = {
+    def mark(
+        self,
+        input_path: str | Path,
+        status: str = "done",
+        ref_paths: list[str | Path] | None = None,
+        target: str | None = None,
+        **extra,
+    ) -> None:
+        rec = {
             "input": str(Path(input_path).resolve()),
             "status": status,
             **extra,
         }
+        if target is not None:
+            rec["target"] = target
+        self._data[self._key(input_path, ref_paths, target)] = rec
         self.flush()
 
     def flush(self) -> None:
@@ -310,6 +408,47 @@ class CompletedManifest:
         tmp.replace(self.path)
 
 
+
+
+def true_peak_dbfs(audio: np.ndarray, sr: int) -> float:
+    """Measure inter-sample true peak via 4× soxr oversampling.
+
+    Returns peak level in dBFS. If soxr is unavailable, falls back to the sample-domain
+    peak with a warning — this function never raises.
+
+    The 4× oversampling at 'HQ' quality matches the ITU-R BS.1770-4 true-peak measurement
+    convention: the upsampled waveform can reveal inter-sample peaks up to ~3 dB above the
+    sample-domain maximum, so replacing sample-peak comparisons with this value avoids
+    silent post-normalization overshoot in exported WAVs.
+    """
+    a = np.asarray(audio, dtype=np.float32)
+    if a.size == 0:
+        return -200.0
+    try:
+        import soxr  # lazy: true-peak oversampler
+    except ImportError:
+        logger.warning(
+            "true-peak measurement unavailable: soxr not installed; using sample peak"
+        )
+        peak = float(np.max(np.abs(a)))
+    else:
+        try:
+            upsampled = soxr.resample(a, sr, sr * 4, quality="HQ")
+            peak = float(np.max(np.abs(upsampled)))
+        except Exception as e:
+            logger.warning(
+                "true-peak measurement failed (soxr runtime error: %s); using sample peak", e
+            )
+            peak = float(np.max(np.abs(a)))
+    # Log the delta between true-peak and sample-peak for diagnostic purposes.
+    sample_peak = float(np.max(np.abs(a)))
+    sample_peak_dbfs = 20.0 * np.log10(sample_peak + 1e-10)
+    true_peak_val = 20.0 * np.log10(peak + 1e-10)
+    logger.debug(
+        "true-peak delta: %.3f dBFS (true) - %.3f dBFS (sample) = %.3f dB",
+        true_peak_val, sample_peak_dbfs, true_peak_val - sample_peak_dbfs,
+    )
+    return true_peak_val
 
 
 def _resample(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
@@ -345,6 +484,9 @@ def _loudness_normalize(audio: np.ndarray, sr: int, target_lufs: float, clamp_db
     try:
         import pyloudnorm as pyln  # lazy
     except Exception:
+        logger.warning(
+            "Loudness normalization unavailable: pyloudnorm not installed; returning audio unchanged"
+        )
         return audio
     try:
         meter = pyln.Meter(sr)
@@ -356,10 +498,19 @@ def _loudness_normalize(audio: np.ndarray, sr: int, target_lufs: float, clamp_db
         gain_db = float(np.clip(target_lufs - loudness, -clamp_db, clamp_db))
         gain = 10.0 ** (gain_db / 20.0)
         out = (audio * gain).astype(np.float32)
-        # Hard-limit to avoid inter-sample clip introduced by the gain.
-        peak = float(np.max(np.abs(out))) if len(out) else 0.0
-        if peak > 0.999:
-            out = (out * (0.999 / peak)).astype(np.float32)
+        # Hard-limit post-gain overshoot using 4×-oversampled true peak so exported WAVs
+        # stay at or below -1.0 dBTP. Using sample peak here would miss inter-sample peaks
+        # that can reach up to ~3 dB above the sample maximum after gain is applied.
+        # NOTE: -1.0 dBTP is intentionally in sync with QualityThresholds.max_true_peak_dbfs
+        # (default -1.0). If that default ever changes, update this limiter to match.
+        _EXPORT_TRUE_PEAK_LIMIT_DBTP = -1.0
+        if len(out):
+            tp = true_peak_dbfs(out, sr)
+            if tp > _EXPORT_TRUE_PEAK_LIMIT_DBTP:
+                tp_linear = 10.0 ** (tp / 20.0)
+                # Scale so true peak lands exactly at the limit.
+                scale = (10.0 ** (_EXPORT_TRUE_PEAK_LIMIT_DBTP / 20.0)) / tp_linear
+                out = (out * scale).astype(np.float32)
         return out
     except Exception as e:
         logger.warning("Loudness normalize skipped: %s", e)

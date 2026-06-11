@@ -90,3 +90,4 @@ desktop.ini
 # ── Agent / team process logs (local provenance, not project source) ───────
 .claude/
 MIGRATION-REMAINING.md
+CLAUDE.md

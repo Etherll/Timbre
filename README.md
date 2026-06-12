@@ -134,6 +134,14 @@ pip install Cython packaging
 
 ## Installation
 
+> [!IMPORTANT]
+> **Windows users:** Run **Command Prompt, PowerShell, or Windows Terminal as Administrator**
+> before installing Timbre or running it for the first time.
+>
+> Some dependencies (especially SpeechBrain model caching/downloads) create **symbolic links**
+> on Windows. Without Administrator privileges (or Windows Developer Mode enabled),
+> symlink creation can fail and cause model download or initialization errors.
+
 ```bash
 git clone https://github.com/Etherll/Timbre.git
 cd Timbre
@@ -141,7 +149,7 @@ python -m venv .venv && source .venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
 ```
 
-`requirements.txt` installs PyTorch from the CUDA 12.1 index plus NeMo, WeSpeaker,
+`requirements.txt` installs PyTorch from the CUDA 13.0 index plus NeMo, WeSpeaker,
 SpeechBrain, audio-separator, FireRedVAD, and Whisper. NeMo powers both diarization
 (Sortformer) and the default ASR backend; if you only want Whisper for transcription, you can
 still run with `--asr-backend whisper`.

@@ -157,7 +157,7 @@ FireRedVAD is downloaded once from its public repo (no token). The default
 `--vad-model-dir` is `pretrained_models/FireRedVAD/VAD`:
 
 ```bash
-huggingface-cli download FireRedTeam/FireRedVAD --local-dir pretrained_models/FireRedVAD
+hf download FireRedTeam/FireRedVAD --local-dir pretrained_models/FireRedVAD
 ```
 
 If FireRedVAD is unavailable or misbehaves on your stack, the default `--vad-backend auto`

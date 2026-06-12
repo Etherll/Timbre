@@ -1,5 +1,11 @@
 # Timbre Requirements
-# Just run: pip install -r requirements.txt
+#
+# Recommended install:
+#   pip install -r requirements.txt
+#
+# PyTorch CUDA 13.0 wheels are pulled from the PyTorch cu130 index below.
+# Current PyTorch command equivalent:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 #
 # No Hugging Face token is required — every model source below is publicly downloadable
 # (audio-separator UVR models, NeMo nvidia/* models, FireRedTeam/FireRedVAD).
@@ -11,11 +17,13 @@ soundfile
 numpy
 tqdm
 
-# PyTorch with CUDA support (automatically uses CPU if no GPU)
---extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.7.0
-torchvision>=0.22.0
-torchaudio>=2.7.0
+# PyTorch with CUDA 13.0 support (automatically uses CPU if no GPU)
+--index-url https://download.pytorch.org/whl/cu130
+--extra-index-url https://pypi.org/simple
+
+torch
+torchvision
+torchaudio
 
 # Audio processing and ML
 pyannote.core>=5.0          # light: Annotation/Timeline contract (NOT pyannote.audio)
@@ -38,11 +46,16 @@ wespeaker @ git+https://github.com/wenet-e2e/wespeaker.git
 
 # --- Model stack (no HF token) ---
 # Vocal separation — audio-separator (UVR / MDX-Net). Use [gpu] for CUDA onnxruntime.
+# Note: ONNX Runtime GPU CUDA support may not track CUDA 13.0 exactly; if this fails,
+# install the newest compatible onnxruntime-gpu manually for your platform.
 audio-separator[gpu]
+
 # Voice activity detection — FireRedVAD (download the model once from FireRedTeam/FireRedVAD).
 fireredvad
 
 # Diarization (NeMo Sortformer) + default ASR (NVIDIA Nemotron 3.5), both run via NeMo.
-# System packages first (Debian/Ubuntu):  apt-get install -y libsndfile1 ffmpeg
-# Then:  pip install Cython packaging
+# System packages first (Debian/Ubuntu):
+#   apt-get install -y libsndfile1 ffmpeg
+# Then:
+#   pip3 install Cython packaging
 nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main

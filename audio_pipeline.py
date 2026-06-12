@@ -298,13 +298,21 @@ def init_speechbrain_speaker_recognition_model(model_source: str = "speechbrain/
         savedir = user_cache_dir / "timbre_speechbrain_cache" / savedir_name
         ensure_dir_exists(savedir)
 
+        # SpeechBrain expects CUDA devices as "cuda:N". Passing bare "cuda" can
+        # trigger: "Could not parse CUDA device string 'cuda'" and a fallback warning.
+        device_str = (
+            f"cuda:{torch.cuda.current_device()}"
+            if DEVICE.type == "cuda" and torch.cuda.is_available()
+            else "cpu"
+        )
+
         model = SpeechBrainEncoderClassifier.from_hparams(
             source=model_source,
             savedir=str(savedir),
-            run_opts={"device": DEVICE.type}
+            run_opts={"device": device_str}
         )
         model.eval()
-        log.info(f"[green]✓ SpeechBrain ECAPA-TDNN encoder '{model_source}' loaded to {DEVICE.type.upper()}.[/]")
+        log.info(f"[green]✓ SpeechBrain ECAPA-TDNN encoder '{model_source}' loaded on {device_str}.[/]")
         return model
     except Exception as e:
         log.error(f"Failed to load SpeechBrain ECAPA-TDNN encoder '{model_source}': {e}")
@@ -1763,4 +1771,3 @@ def run_separator_on_noisy_segments(
 
 if __name__ == '__main__':
     log.info("audio_pipeline.py executed directly. This script is intended to be imported as a module.")
-    # Example:

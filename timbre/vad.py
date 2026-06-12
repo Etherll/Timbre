@@ -19,6 +19,9 @@ core arithmetic (:func:`speech_ratio`) is a pure, unit-testable helper.
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +110,64 @@ def load_firered_vad(model_dir: str | Path | None = None, use_gpu: bool = False,
     return vad
 
 
+
+def _firered_input_wav(wav_path: str | Path, sample_rate: int = 16000) -> Path:
+    """Return a FireRedVAD-safe WAV path: 16 kHz, mono, signed 16-bit PCM.
+
+    FireRedVAD can raise a bare ``AssertionError`` on files such as separator outputs that
+    are 44.1 kHz/stereo. Normalize every FireRedVAD input first so the detector always sees
+    the format it expects. The normalized file is cached under the OS temp directory and
+    reused while the source mtime/size are unchanged.
+    """
+    src = Path(wav_path)
+    if not src.exists():
+        return src
+
+    try:
+        stat = src.stat()
+        cache_dir = Path(tempfile.gettempdir()) / "timbre_fireredvad_16k_mono"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_name = f"{src.stem}_{stat.st_size}_{int(stat.st_mtime)}_16k_mono.wav"
+        dst = cache_dir / cache_name
+        if dst.exists() and dst.stat().st_size > 44:
+            return dst
+
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            cmd = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", str(src),
+                "-ar", str(sample_rate),
+                "-ac", "1",
+                "-sample_fmt", "s16",
+                str(dst),
+            ]
+            subprocess.run(cmd, check=True)
+            if dst.exists() and dst.stat().st_size > 44:
+                return dst
+
+        # Fallback for environments without ffmpeg. This is slower and loads the file into
+        # memory, but keeps VAD robust for shorter clips/tests.
+        import numpy as np  # lazy
+        import soundfile as sf  # lazy
+
+        audio, file_sr = sf.read(str(src), dtype="float32", always_2d=False)
+        if getattr(audio, "ndim", 1) > 1:
+            audio = audio.mean(axis=1).astype(np.float32)
+        if file_sr != sample_rate:
+            import librosa  # lazy
+            audio = librosa.resample(audio, orig_sr=file_sr, target_sr=sample_rate).astype(np.float32)
+        sf.write(str(dst), audio, sample_rate, subtype="PCM_16")
+        if dst.exists() and dst.stat().st_size > 44:
+            return dst
+    except Exception as e:
+        logger.warning("Could not normalize %s for FireRedVAD; using original file: %s", src.name, e)
+
+    return src
+
 def detect_speech_spans(vad: Any, wav_path: str | Path) -> tuple[list[tuple[float, float]], float]:
     """Run FireRedVAD; return ``(timestamps, total_duration_seconds)``.
 
@@ -118,7 +179,8 @@ def detect_speech_spans(vad: Any, wav_path: str | Path) -> tuple[list[tuple[floa
     Silero) instead of silently yielding zero spans.
     """
     try:
-        result, _probs = vad.detect(str(wav_path))
+        firered_wav_path = _firered_input_wav(wav_path)
+        result, _probs = vad.detect(str(firered_wav_path))
     except Exception as e:  # surface the real cause (FireRedVAD sometimes raises with "")
         raise RuntimeError(
             f"FireRedVAD detect() failed: {type(e).__name__}: {e!r}"

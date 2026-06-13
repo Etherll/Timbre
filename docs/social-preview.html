@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Timbre — Social Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Schibsted+Grotesk:wght@400;500;700&family=Martian+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#101213; --ink-deep:#080a0b; --panel:#171a1a;
+    --line:#34403d; --line-soft:#25302e;
+    --cream:#efe6d2; --cream-dim:#a4977b; --cream-mute:#6f654f;
+    --amber:#f2a33c; --amber-hot:#ffc46b; --amber-deep:#b97419;
+    --green:#9ed36a; --cyan:#59c6e8;
+    --font-display:"Young Serif",Georgia,serif;
+    --font-ui:"Schibsted Grotesk","Segoe UI",sans-serif;
+    --font-mono:"Martian Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:#000;}
+
+  /* exact social card dimensions */
+  .card{
+    position:relative; width:1280px; height:640px; overflow:hidden;
+    font-family:var(--font-ui); color:var(--cream);
+    background:
+      radial-gradient(120% 95% at 12% -15%, rgba(89,198,232,.07), transparent 52%),
+      radial-gradient(120% 110% at 102% 118%, rgba(242,163,60,.10), transparent 58%),
+      var(--ink);
+  }
+
+  /* faint blueprint grid */
+  .grid{position:absolute; inset:0; opacity:.5;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,.022) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,.022) 1px, transparent 1px);
+    background-size:44px 44px;}
+
+  /* ── the waveform field: many dimmed voices, one amber target ── */
+  .wave{position:absolute; left:0; right:0; display:flex; align-items:center;
+    gap:6px; height:120px; padding:0 70px; pointer-events:none;}
+  .wave.top{top:74px;}
+  .wave.bottom{bottom:70px;}
+  .wave span{flex:1; border-radius:99px; background:var(--line);
+    opacity:.55; transform-origin:center;}
+
+  /* the isolated target band — amber, glowing, dead-center */
+  .target{position:absolute; left:0; right:0; top:50%; transform:translateY(-50%);
+    height:200px; display:flex; align-items:center; gap:7px; padding:0 70px;
+    pointer-events:none; z-index:3;}
+  .target span{flex:1; border-radius:99px;
+    background:linear-gradient(to bottom,var(--amber-hot),var(--amber),var(--amber-deep));
+    box-shadow:0 0 16px rgba(242,163,60,.35);}
+  /* spotlight behind the target */
+  .spot{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:1180px; height:300px; z-index:2; pointer-events:none;
+    background:radial-gradient(60% 80% at 50% 50%, rgba(242,163,60,.12), transparent 70%);}
+
+  /* ── content overlay ── */
+  .veil{position:absolute; inset:0; z-index:4; pointer-events:none;
+    background:linear-gradient(to right, rgba(16,18,19,.94) 30%, rgba(16,18,19,.55) 52%, rgba(16,18,19,.30) 100%);}
+
+  .content{position:absolute; z-index:5; left:74px; top:0; bottom:0;
+    width:760px; display:flex; flex-direction:column; justify-content:center;}
+
+  .kicker{display:flex; align-items:center; gap:12px;
+    font-family:var(--font-mono); font-size:12px; font-weight:600;
+    letter-spacing:.34em; text-transform:uppercase; color:var(--cream-dim);}
+  .kicker .dot{width:8px; height:8px; border-radius:99px; background:var(--green);
+    box-shadow:0 0 12px rgba(158,211,106,.6);}
+
+  h1{font-family:var(--font-display); font-weight:400; color:var(--cream);
+    font-size:138px; line-height:.92; letter-spacing:-.01em; margin:22px 0 0;}
+  h1 .dotk{color:var(--amber);}
+
+  .tag{font-size:25px; line-height:1.42; color:var(--cream-dim); max-width:600px;
+    margin-top:26px; font-weight:400;}
+  .tag b{color:var(--cream); font-weight:500;}
+
+  .pills{display:flex; gap:11px; margin-top:34px; flex-wrap:wrap;}
+  .pill{font-family:var(--font-mono); font-size:12.5px; font-weight:600;
+    letter-spacing:.05em; color:var(--cream-dim);
+    border:1px solid var(--line); border-radius:99px; padding:9px 16px;
+    background:rgba(0,0,0,.22);}
+  .pill .arw{color:var(--amber); margin-right:8px;}
+
+  /* corner registration marks */
+  .reg{position:absolute; z-index:6; font-family:var(--font-mono);
+    font-size:10.5px; letter-spacing:.28em; color:var(--cream-mute);}
+  .reg.tr{top:34px; right:40px;}
+  .reg.br{bottom:34px; right:40px; text-align:right;}
+
+  /* film grain */
+  .grain{position:absolute; inset:0; z-index:7; pointer-events:none; opacity:.05;
+    mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+  .grain::after{content:""; position:absolute; inset:0; opacity:.3;
+    background:repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,0,0,.16) 2px 3px);}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="grid"></div>
+
+  <!-- crowd of dimmed voices -->
+  <div class="wave top" id="wt"></div>
+  <div class="wave bottom" id="wb"></div>
+
+  <!-- isolated target -->
+  <div class="spot"></div>
+  <div class="target" id="tgt"></div>
+
+  <div class="veil"></div>
+
+  <div class="content">
+    <div class="kicker"><span class="dot"></span>SPEAKER&nbsp;ISOLATION&nbsp;·&nbsp;TTS&nbsp;DATASETS</div>
+    <h1>Timbre<span class="dotk">.</span></h1>
+    <p class="tag">Extract <b>one speaker's</b> clean, non-overlapped, speaker-verified voice from any crowded recording — exported as a word-safe <b>LJSpeech</b> dataset.</p>
+    <div class="pills">
+      <span class="pill"><span class="arw">→</span>Diarize &amp; separate</span>
+      <span class="pill"><span class="arw">→</span>Verify identity</span>
+      <span class="pill"><span class="arw">→</span>Word-safe splits</span>
+    </div>
+  </div>
+
+  <div class="reg tr">v1 · 9-STAGE PIPELINE</div>
+  <div class="reg br">PY 3.10+ · CUDA · NeMo · WeSpeaker</div>
+
+  <div class="grain"></div>
+</div>
+
+<script>
+  // deterministic pseudo-random so the render is stable
+  let s = 1337;
+  const rnd = () => (s = (s*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  const bars = (el, n, min, max, dim) => {
+    let h = "";
+    for (let i=0;i<n;i++){
+      const v = min + Math.pow(rnd(), dim?1.3:0.7) * (max-min);
+      h += `<span style="height:${v.toFixed(1)}px"></span>`;
+    }
+    el.innerHTML = h;
+  };
+
+  // crowd: lots of thin, low bars
+  bars(document.getElementById('wt'), 96, 6, 70, true);
+  bars(document.getElementById('wb'), 96, 6, 70, true);
+
+  // target: bold, tall, expressive amber waveform
+  const tgt = document.getElementById('tgt');
+  let h = "", N = 80;
+  for (let i=0;i<N;i++){
+    // envelope so it swells in the middle like a spoken phrase
+    const env = Math.sin((i/N)*Math.PI);
+    const v = 14 + (0.35 + 0.65*rnd()) * env * 178;
+    h += `<span style="height:${v.toFixed(1)}px"></span>`;
+  }
+  tgt.innerHTML = h;
+</script>
+</body>
+</html>

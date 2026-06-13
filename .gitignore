@@ -96,9 +96,11 @@ studio/.tauri/
 MIGRATION-REMAINING.md
 CLAUDE.md
 *.png
-# …but the Studio app's bundle icons and README screenshots are source:
+# ...but the Studio app's bundle icons, README screenshots, and social preview are source:
 !studio/src-tauri/icons/*.png
 !studio/docs/*.png
+!docs/social-preview.png
+!docs/timbre-social-preview.png
 /.codex
 /.playwright-mcp
 AGENTS.md

@@ -23,6 +23,21 @@ reference clip in the form, and download a ready-to-train LJSpeech dataset:
 walks you through GPU check → install → input (YouTube/upload) → target + reference → run →
 preview → download, all as Colab form cells.
 
+### Desktop app (Timbre Studio)
+
+A native desktop console for the pipeline lives in [`studio/`](studio/): drop a recording or
+paste a YouTube link, drop reference clips, press **RUN EXTRACTION**, and watch the real
+pipeline stages light up with a live log. On Windows release builds, **OUTPUT → SETUP**
+can provision the Timbre repo, managed Python environment, ffmpeg/ffprobe, yt-dlp, and
+FireRedVAD model under a folder you choose. For developer runs, you can still use your
+own repo checkout and Python install.
+
+```bash
+cd studio
+npm install
+npm run tauri dev    # needs Node 20+ and Rust stable
+```
+
 ---
 
 ## Contents

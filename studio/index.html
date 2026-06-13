@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Timbre Studio</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body data-phase="idle">
+    <div id="grain" aria-hidden="true"></div>
+
+    <!-- ── Titlebar ──────────────────────────────────────────────────── -->
+    <header id="titlebar" data-tauri-drag-region>
+      <div class="tb-brand" data-tauri-drag-region>
+        <svg class="tb-glyph" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <rect x="1.5"  y="6.5" width="2.4" height="5"  rx="1.2" />
+          <rect x="5.4"  y="3.5" width="2.4" height="11" rx="1.2" />
+          <rect x="9.3"  y="0.5" width="2.4" height="17" rx="1.2" />
+          <rect x="13.2" y="5"   width="2.4" height="8"  rx="1.2" />
+        </svg>
+        <span class="tb-name" data-tauri-drag-region>TIMBRE</span>
+        <span class="tb-sub" data-tauri-drag-region>STUDIO</span>
+      </div>
+      <div class="tb-env" id="env-strip" data-tauri-drag-region></div>
+      <button id="update-btn" class="update-btn mono" title="Check for signed app updates">UPDATE</button>
+      <div class="tb-controls">
+        <button id="tb-min" class="tb-btn" aria-label="Minimize"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5.5" x2="9" y2="5.5"/></svg></button>
+        <button id="tb-max" class="tb-btn" aria-label="Maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1"/></svg></button>
+        <button id="tb-close" class="tb-btn tb-btn-close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5"/></svg></button>
+      </div>
+    </header>
+
+    <!-- ── Main shell ────────────────────────────────────────────────── -->
+    <main id="shell">
+      <!-- left: the console -->
+      <section id="console">
+
+        <article class="card reveal" id="card-source" style="--d:0">
+          <span class="card-tag mono">01 · SOURCE <span class="req-status" id="req-source" data-state="missing" aria-label="Source required" title="Required: add a source recording"></span></span>
+
+          <div class="dropwell" id="source-drop" data-dropzone="source" tabindex="0" role="button"
+               aria-label="Drop a recording or browse for one">
+            <div class="dropwell-empty" id="source-empty">
+              <svg class="dropwell-ico" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+                <rect x="3"  y="13" width="3" height="8"  rx="1.5"/>
+                <rect x="9"  y="8"  width="3" height="18" rx="1.5"/>
+                <rect x="15" y="3"  width="3" height="28" rx="1.5"/>
+                <rect x="21" y="9"  width="3" height="16" rx="1.5"/>
+                <rect x="27" y="13" width="3" height="8"  rx="1.5"/>
+              </svg>
+              <p class="dropwell-line">Drop a recording <span class="dim">— audio or video —</span></p>
+              <p class="dropwell-hint mono">or <button class="linkish" id="source-browse">browse files</button></p>
+            </div>
+            <div class="filechip" id="source-chip" hidden>
+              <div class="filechip-meta">
+                <span class="filechip-name" id="source-name"></span>
+                <span class="filechip-sub mono" id="source-sub"></span>
+              </div>
+              <button class="chip-x" id="source-clear" aria-label="Remove source">✕</button>
+            </div>
+          </div>
+
+          <div class="urlrow" id="urlrow">
+            <svg class="urlrow-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M15 4.6a2 2 0 0 0-1.4-1.4C12.3 2.8 8 2.8 8 2.8s-4.3 0-5.6.4A2 2 0 0 0 1 4.6 21 21 0 0 0 .7 8 21 21 0 0 0 1 11.4a2 2 0 0 0 1.4 1.4c1.3.4 5.6.4 5.6.4s4.3 0 5.6-.4a2 2 0 0 0 1.4-1.4A21 21 0 0 0 15.3 8 21 21 0 0 0 15 4.6zM6.5 10.3V5.7L10.4 8z"/>
+            </svg>
+            <input id="url-input" class="mono" type="text" spellcheck="false"
+                   placeholder="…or paste a YouTube link" aria-label="YouTube URL" />
+            <button id="fetch-btn" class="btn-small" disabled>PULL AUDIO</button>
+          </div>
+          <p class="dep-hint mono" id="url-hint" hidden></p>
+          <div class="fetchbar" id="fetchbar" hidden>
+            <div class="fetchbar-fill" id="fetchbar-fill"></div>
+            <span class="fetchbar-label mono" id="fetchbar-label">contacting…</span>
+          </div>
+        </article>
+
+        <article class="card reveal" id="card-voice" style="--d:1">
+          <span class="card-tag mono">02 · TARGET VOICE</span>
+
+          <label class="field">
+            <span class="field-label mono">
+              SPEAKER NAME
+              <span class="req-status" id="req-speaker" data-state="missing" aria-label="Speaker name required" title="Required: enter the speaker name"></span>
+            </span>
+            <input id="name-input" type="text" placeholder="e.g. Ada" spellcheck="false" autocomplete="off" />
+          </label>
+
+          <div class="dropwell dropwell-slim" id="refs-drop" data-dropzone="refs" tabindex="0" role="button"
+               aria-label="Drop reference clips of the target speaker">
+            <p class="dropwell-line sm">
+              <span class="req-status" id="req-refs" data-state="missing" aria-label="Reference clips required" title="Required: add at least one reference clip"></span>
+              Drop <em>clean reference clips</em> of this voice
+              <span class="dim">· more clips → steadier ID</span></p>
+            <p class="dropwell-hint mono"><button class="linkish" id="refs-browse">browse files</button></p>
+          </div>
+
+          <div class="genrow">
+            <button class="btn-small" id="gen-btn" disabled>◌ FIND VOICE SAMPLES</button>
+            <span class="genhint mono">scans the source for clean solo speech — listen &amp; pick</span>
+          </div>
+
+          <section id="cands" hidden>
+            <header class="cands-head">
+              <span class="cands-title mono" id="cands-title">LISTENING FOR VOICE IN THE RECORDING…</span>
+              <button class="term-btn mono" id="cands-rescan" hidden>↻ RESCAN</button>
+              <button class="chip-x" id="cands-close" aria-label="Close candidates">✕</button>
+            </header>
+            <div class="cands-scan" id="cands-scan"><span class="cands-scan-bar"></span></div>
+            <ul id="cands-list"></ul>
+            <button class="btn-small ghost" id="cands-more" hidden>SHOW 6 MORE</button>
+          </section>
+
+          <ul class="refs" id="refs-list"></ul>
+        </article>
+
+        <article class="card reveal" id="card-output" style="--d:2">
+          <span class="card-tag mono">03 · OUTPUT</span>
+          <div class="outrow">
+            <div class="outpath">
+              <span class="field-label mono">
+                DATASET FOLDER
+                <span class="req-status" id="req-output" data-state="missing" aria-label="Dataset folder required" title="Required: choose a dataset folder"></span>
+              </span>
+              <span class="outpath-val mono" id="outdir-val" title=""></span>
+            </div>
+            <div class="out-actions">
+              <button class="btn-small" id="outdir-btn">CHANGE</button>
+              <button class="btn-small ghost" id="results-btn" title="browse the newest completed run">RESULTS</button>
+              <button class="btn-small ghost" id="setup-toggle" aria-expanded="false">SETUP</button>
+              <button class="btn-small ghost" id="advanced-toggle" aria-expanded="false">ADVANCED ▾</button>
+            </div>
+          </div>
+
+          <div class="ops-row" aria-label="Run presets and settings tools">
+            <div class="preset-rail" role="group" aria-label="Run preset">
+              <button class="preset-btn active" data-preset="balanced">BALANCED</button>
+              <button class="preset-btn" data-preset="quick-check">QUICK CHECK</button>
+              <button class="preset-btn" data-preset="word-safe">WORD SAFE</button>
+              <button class="preset-btn" data-preset="low-vram">LOW VRAM</button>
+            </div>
+            <div class="ops-tools">
+              <button class="btn-small ghost" id="cmd-btn">COMMAND</button>
+              <button class="btn-small ghost" id="settings-export">EXPORT</button>
+              <button class="btn-small ghost" id="settings-import-btn">IMPORT</button>
+              <button class="btn-small ghost" id="settings-reset">RESET</button>
+              <input id="settings-import" type="file" accept="application/json,.json" hidden />
+            </div>
+          </div>
+
+          <div class="setup-panel" id="setup-panel" hidden>
+            <div class="setup-head">
+              <div>
+                <span class="field-label mono">MANAGED INSTALL</span>
+                <span class="setup-dir mono" id="setup-dir-val"></span>
+              </div>
+              <div class="setup-actions">
+                <button class="btn-small ghost" id="setup-change">PATH</button>
+                <button class="btn-small ghost" id="setup-refresh">CHECK</button>
+                <button class="btn-small" id="setup-run">INSTALL / REPAIR</button>
+                <button class="btn-small ghost" id="setup-adopt" disabled>USE</button>
+              </div>
+            </div>
+            <ul class="setup-list mono" id="setup-list"></ul>
+          </div>
+
+          <div class="drawer" id="advanced" hidden>
+            <div class="adv-grid">
+
+              <span class="adv-group mono">COMPUTE</span>
+              <label class="field">
+                <span class="field-label mono">DEVICE</span>
+                <select id="adv-device">
+                  <option value="auto">auto — CUDA if available</option>
+                  <option value="cuda">cuda — force GPU</option>
+                  <option value="cpu">cpu — slow fallback</option>
+                </select>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-lowvram" />
+                <span class="switch-track"></span>
+                <span class="switch-text">Low VRAM <span class="dim">— free models per stage</span></span>
+              </label>
+
+              <span class="adv-group mono">MODELS</span>
+              <label class="field">
+                <span class="field-label mono">ASR BACKEND</span>
+                <select id="adv-asr">
+                  <option value="nemotron">nemotron — NVIDIA streaming</option>
+                  <option value="whisper">whisper — large-v3</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label mono">EMBEDDING</span>
+                <select id="adv-embed">
+                  <option value="wespeaker">wespeaker — default</option>
+                  <option value="ecapa">ecapa — SpeechBrain</option>
+                  <option value="titanet">titanet — NeMo</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label mono">VAD BACKEND</span>
+                <select id="adv-vad">
+                  <option value="auto">auto — FireRed → Silero</option>
+                  <option value="firered">firered only</option>
+                  <option value="silero">silero only</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label mono">LANGUAGE</span>
+                <input id="adv-language" type="text" value="en" maxlength="5" spellcheck="false" />
+              </label>
+
+              <span class="adv-group mono">PIPELINE</span>
+              <label class="switch">
+                <input type="checkbox" id="adv-dryrun" />
+                <span class="switch-track"></span>
+                <span class="switch-text">Dry run <span class="dim">— first 60 s only</span></span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-wordalign" />
+                <span class="switch-track"></span>
+                <span class="switch-text">Word alignment <span class="dim">— NeMo NFA tier</span></span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-septier" />
+                <span class="switch-track"></span>
+                <span class="switch-text">HQ separation tier</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-skipsep" />
+                <span class="switch-track"></span>
+                <span class="switch-text">Skip separation <span class="dim">— use original audio</span></span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-debug" />
+                <span class="switch-track"></span>
+                <span class="switch-text">Debug logging</span>
+              </label>
+              <label class="field">
+                <span class="field-label mono">VERIFY THRESHOLD</span>
+                <input id="adv-threshold" type="number" min="0" max="1" step="0.05" value="0.7" />
+              </label>
+
+              <span class="adv-group mono">CLIPS &amp; DATASET</span>
+              <label class="field">
+                <span class="field-label mono">CLIP LENGTH MIN (S)</span>
+                <input id="adv-segmin" type="number" min="0.5" max="30" step="0.5" value="3" />
+              </label>
+              <label class="field">
+                <span class="field-label mono">CLIP LENGTH MAX (S)</span>
+                <input id="adv-segmax" type="number" min="2" max="60" step="0.5" value="15" />
+              </label>
+              <label class="field">
+                <span class="field-label mono">DATASET RATE</span>
+                <select id="adv-ttssr">
+                  <option value="22050">22 050 Hz</option>
+                  <option value="24000" selected>24 000 Hz</option>
+                  <option value="44100">44 100 Hz</option>
+                  <option value="48000">48 000 Hz</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label mono">MANIFEST FORMAT</span>
+                <select id="adv-dsformat">
+                  <option value="ljspeech">ljspeech — metadata.csv</option>
+                  <option value="ljspeech+jsonl">ljspeech + jsonl</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label mono">EVAL FRACTION</span>
+                <input id="adv-evalfrac" type="number" min="0" max="0.5" step="0.05" value="0.1" />
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="adv-dnsmos" />
+                <span class="switch-track"></span>
+                <span class="switch-text">DNSMOS filter <span class="dim">— quality gate</span></span>
+              </label>
+
+              <span class="adv-group mono">VOICE SAMPLES</span>
+              <label class="field">
+                <span class="field-label mono">CANDIDATES TO FIND</span>
+                <input id="adv-reflimit" type="number" min="10" max="60" step="10" value="30" />
+              </label>
+              <label class="field">
+                <span class="field-label mono">SAMPLE LENGTH (S)</span>
+                <input id="adv-refmax" type="number" min="4" max="20" step="1" value="12" />
+              </label>
+
+              <span class="adv-group mono">ENVIRONMENT</span>
+              <label class="field">
+                <span class="field-label mono">PYTHON</span>
+                <input id="adv-python" type="text" spellcheck="false" placeholder="python" />
+              </label>
+              <label class="field">
+                <span class="field-label mono">TIMBRE REPO</span>
+                <input id="adv-repo" type="text" spellcheck="false" placeholder="path containing run_timbre.py" />
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <div id="vad-banner" hidden>
+          <span class="vb-led" aria-hidden="true"></span>
+          <span class="vb-text mono">FIREREDVAD MODEL MISSING — preflight will abort the run without it</span>
+          <button class="btn-small" id="vad-dl">DOWNLOAD NOW</button>
+        </div>
+
+        <div id="run-gate" role="status" hidden>
+          <span class="vb-led" aria-hidden="true"></span>
+          <span class="vb-text mono" id="run-gate-text"></span>
+        </div>
+
+        <div id="transport" class="reveal" style="--d:3">
+          <button id="run-btn" disabled>
+            <span class="run-stripes" aria-hidden="true"></span>
+            <span class="run-label">RUN EXTRACTION</span>
+          </button>
+          <button id="cancel-btn" hidden>ABORT</button>
+          <div class="transport-meta mono">
+            <span id="total-elapsed"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- right: the rack -->
+      <aside id="rack" class="reveal" style="--d:2">
+        <div id="readout">
+          <div class="readout-eyebrow mono" id="readout-eyebrow">SIGNAL PATH</div>
+          <h1 class="readout-line" id="readout-line">Awaiting signal.</h1>
+          <div class="readout-sub mono" id="readout-sub">drop a recording to begin</div>
+        </div>
+
+        <canvas id="vu" width="320" height="56" aria-hidden="true"></canvas>
+
+        <ol id="stages"></ol>
+
+        <div id="result-card" hidden>
+          <div class="result-num mono" id="result-clips">—</div>
+          <div class="result-cap">verified clips in the dataset</div>
+          <div class="result-actions">
+            <button class="btn-small" id="review-btn">◈ REVIEW RESULTS</button>
+            <button class="btn-small ghost" id="open-dataset">DATASET</button>
+            <button class="btn-small ghost" id="open-outdir">FOLDER</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ── Terminal ──────────────────────────────────────────────────── -->
+    <section id="terminal" class="collapsed">
+      <header id="terminal-head">
+        <span class="term-title mono">▙ TRANSMISSION LOG</span>
+        <span class="term-count mono" id="term-count"></span>
+        <span class="term-spacer"></span>
+        <button class="term-btn mono" id="term-copy">COPY</button>
+        <button class="term-btn mono" id="term-toggle">OPEN</button>
+      </header>
+      <div id="log" role="log" aria-live="off"></div>
+    </section>
+
+    <!-- ── Results browser ───────────────────────────────────────────── -->
+    <section id="results" hidden>
+      <header id="results-head">
+        <div class="res-id">
+          <div class="res-eyebrow mono">◈ RESULTS</div>
+          <h2 id="res-title">—</h2>
+        </div>
+        <span class="res-meta mono" id="res-meta"></span>
+        <span class="res-spacer"></span>
+        <div class="res-tools">
+          <input id="res-search" type="search" spellcheck="false" placeholder="filter clips" aria-label="Filter result clips" />
+          <button class="btn-small ghost" id="res-copy">COPY LIST</button>
+        </div>
+        <button class="btn-small ghost" id="res-reveal">OPEN FOLDER</button>
+        <button class="chip-x" id="res-close" aria-label="Close results">✕</button>
+      </header>
+      <div class="res-strip"><div id="res-strip-fill"></div></div>
+      <nav id="res-tabs">
+        <button class="res-tab mono active" data-tab="clips" id="tab-clips">CLIPS</button>
+        <button class="res-tab mono" data-tab="visuals" id="tab-visuals">VISUALS</button>
+      </nav>
+      <div id="res-body">
+        <aside id="run-history" aria-label="Previous runs">
+          <header class="history-head">
+            <span class="mono">RUN HISTORY</span>
+            <button class="term-btn mono" id="history-refresh">REFRESH</button>
+          </header>
+          <ul id="history-list"></ul>
+        </aside>
+        <div id="res-clips">
+          <div id="res-reel"></div>
+          <ul id="res-list"></ul>
+          <button class="btn-small ghost" id="res-more" hidden>LOAD 20 MORE</button>
+        </div>
+        <div id="res-visuals" hidden>
+          <ul id="vis-grid"></ul>
+        </div>
+      </div>
+    </section>
+
+    <div id="lightbox" hidden>
+      <img id="lightbox-img" alt="" />
+      <div class="lb-cap mono" id="lightbox-cap"></div>
+    </div>
+
+    <section id="command-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="cmd-title">
+      <div class="sheet-panel">
+        <header class="sheet-head">
+          <div>
+            <div class="res-eyebrow mono">RUN COMMAND</div>
+            <h2 id="cmd-title">Pipeline preview</h2>
+          </div>
+          <button class="chip-x" id="cmd-close" aria-label="Close command preview">✕</button>
+        </header>
+        <pre id="cmd-text" class="mono"></pre>
+        <div class="sheet-actions">
+          <span class="sheet-note mono" id="cmd-note"></span>
+          <button class="btn-small" id="cmd-copy">COPY COMMAND</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="toasts" aria-live="polite"></div>
+  </body>
+</html>

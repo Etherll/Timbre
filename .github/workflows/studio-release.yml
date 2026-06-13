@@ -1,0 +1,135 @@
+name: Studio
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "studio/**"
+      - ".github/workflows/studio-release.yml"
+  push:
+    branches:
+      - main
+    tags:
+      - "studio-v*.*.*"
+      - "studio-v*.*.*-*"
+    paths:
+      - "studio/**"
+      - ".github/workflows/studio-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate Studio
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri -> target
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Check tag matches Studio versions
+        if: startsWith(github.ref, 'refs/tags/studio-v')
+        working-directory: studio
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const want = process.env.VERSION.replace(/^studio-v/, "");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+          const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+          const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version = "([^"]+)"/m)?.[1];
+          const versions = { "package.json": pkg, "src-tauri/tauri.conf.json": tauri, "src-tauri/Cargo.toml": cargo };
+          const bad = Object.entries(versions).filter(([, got]) => got !== want);
+          if (bad.length) {
+            console.error(`Tag ${process.env.VERSION} expects Studio version ${want}.`);
+            for (const [file, got] of bad) console.error(`${file}: ${got}`);
+            process.exit(1);
+          }
+          NODE
+
+      - run: npm ci
+        working-directory: studio
+
+      - run: npm test
+        working-directory: studio
+
+      - run: npm run build
+        working-directory: studio
+
+      - run: cargo check --locked
+        working-directory: studio/src-tauri
+
+  release:
+    name: Build Signed Release
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/studio-v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri -> target
+
+      - name: Install Linux Tauri dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Apple universal targets
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - run: npm ci
+        working-directory: studio
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: studio
+          tauriScript: npm run tauri
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'studio-v__VERSION__' }}
+          releaseName: Timbre Studio ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v__VERSION__' }}
+          releaseBody: Signed Timbre Studio desktop installers and updater metadata.
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          args: ${{ matrix.args }}

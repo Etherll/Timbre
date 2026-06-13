@@ -87,7 +87,18 @@ desktop.ini
 *.swp
 .ipynb_checkpoints/
 
+# ── Studio app: user media pulls (yt-dlp downloads, ref candidates) ────────
+/downloads/
+studio/.tauri/
+
 # ── Agent / team process logs (local provenance, not project source) ───────
 .claude/
 MIGRATION-REMAINING.md
 CLAUDE.md
+*.png
+# …but the Studio app's bundle icons and README screenshots are source:
+!studio/src-tauri/icons/*.png
+!studio/docs/*.png
+/.codex
+/.playwright-mcp
+AGENTS.md

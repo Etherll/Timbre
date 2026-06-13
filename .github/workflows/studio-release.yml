@@ -119,6 +119,14 @@ jobs:
       - run: npm ci
         working-directory: studio
 
+      - name: Compute release metadata
+        id: release_meta
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^studio-v', ''
+          $isPrerelease = $env:GITHUB_REF_TYPE -eq 'tag' -and $version.Contains('-')
+          "prerelease=$($isPrerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,5 +139,5 @@ jobs:
           releaseName: Timbre Studio ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v__VERSION__' }}
           releaseBody: Signed Timbre Studio desktop installers and updater metadata.
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
           args: ${{ matrix.args }}

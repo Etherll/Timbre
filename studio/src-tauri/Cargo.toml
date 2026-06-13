@@ -1,6 +1,6 @@
 [package]
 name = "timbre-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Timbre Studio — desktop console for the Timbre voice-extraction pipeline"
 edition = "2021"
 

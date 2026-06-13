@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════════
-   TIMBRE STUDIO — "broadcast console"
+   TIMBRE STUDIO - "broadcast console"
    Graphite chassis · amber phosphor · blue operator accents.
    Type: Young Serif (display) · Schibsted Grotesk (UI) · Martian Mono (data)
    ════════════════════════════════════════════════════════════════════ */
@@ -204,7 +204,7 @@ body[data-runtime="browser"] .tb-controls { display: none; }
 @keyframes reveal { to { opacity: 1; transform: none; } }
 
 /* ════════════════════════════════════════════════════════════════
-   CARDS — rack equipment with riveted label tags
+   CARDS - rack equipment with riveted label tags
    ════════════════════════════════════════════════════════════════ */
 .card {
   position: relative;
@@ -584,9 +584,19 @@ body[data-runtime="browser"] .tb-controls { display: none; }
   direction: rtl;
   text-align: left;
 }
+.setup-note {
+  display: block;
+  margin-top: 5px;
+  max-width: 56ch;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  color: var(--cream-mute);
+  white-space: normal;
+}
 .setup-actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(74px, max-content));
+  grid-template-columns: repeat(3, minmax(74px, max-content));
   gap: 8px;
 }
 .setup-actions .btn-small {
@@ -595,45 +605,122 @@ body[data-runtime="browser"] .tb-controls { display: none; }
   place-items: center;
   padding: 0 11px;
 }
+/* ── Setup: status summary banner (the "what to do now" hero) ───────── */
+.setup-summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px 13px;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--cream-mute);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.ss-led {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--cream-mute); flex: none;
+}
+.ss-text { font-size: 9.5px; letter-spacing: 0.03em; color: var(--cream); line-height: 1.45; }
+.setup-summary[data-tone="missing"] {
+  border-left-color: var(--amber);
+  background: rgba(242, 163, 60, 0.05);
+}
+.setup-summary[data-tone="missing"] .ss-led {
+  background: var(--amber); box-shadow: var(--glow-amber);
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+.setup-summary[data-tone="working"] { border-left-color: var(--blue); background: rgba(89, 198, 232, 0.05); }
+.setup-summary[data-tone="working"] .ss-led { background: var(--blue); box-shadow: var(--glow-blue); animation: led-pulse 1s ease-in-out infinite; }
+.setup-summary[data-tone="ready"] { border-left-color: var(--green); background: rgba(158, 211, 106, 0.05); }
+.setup-summary[data-tone="ready"] .ss-led { background: var(--green); box-shadow: var(--glow-green); }
+
+/* the master install action - chunky, two-line, unmistakable */
+.setup-run-btn {
+  display: grid; gap: 1px; justify-items: start;
+  padding: 6px 13px; min-height: 38px;
+  border-radius: 7px;
+  border: 1px solid var(--amber);
+  background: linear-gradient(to bottom, rgba(242, 163, 60, 0.16), rgba(242, 163, 60, 0.06));
+  color: var(--amber);
+  transition: all 0.15s var(--ease);
+}
+.setup-run-btn:hover:not(:disabled) {
+  background: linear-gradient(to bottom, rgba(242, 163, 60, 0.26), rgba(242, 163, 60, 0.1));
+  box-shadow: var(--glow-amber);
+}
+.setup-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.srb-label { font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.14em; }
+.srb-sub { font-size: 8px; letter-spacing: 0.04em; color: var(--cream-dim); text-transform: none; }
+.setup-summary[data-tone="ready"] .setup-run-btn { border-color: var(--line); color: var(--cream-dim); background: rgba(255,255,255,0.03); }
+
+/* ── Setup: per-dependency rows (full width, never truncated) ───────── */
 .setup-list {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 8px;
 }
-.setup-list li {
-  display: flex;
+.setup-row {
+  display: grid;
+  grid-template-columns: auto minmax(68px, auto) 1fr auto auto;
   align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: var(--cream-dim);
-  font-size: 8.5px;
-  letter-spacing: 0.1em;
+  gap: 10px;
   border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  padding: 7px 8px;
+  border-radius: 7px;
+  padding: 11px 13px;
   background: rgba(255, 255, 255, 0.02);
 }
-.setup-list li::before {
-  content: "";
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--red);
-  box-shadow: 0 0 10px rgba(242, 97, 63, 0.45);
+.sr-dot {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red); box-shadow: 0 0 10px rgba(242, 97, 63, 0.45);
 }
-.setup-list li.ok { color: var(--cream); }
-.setup-list li.ok::before {
-  background: var(--green);
-  box-shadow: var(--glow-green);
+.sr-name {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--cream); white-space: nowrap;
 }
-.setup-list li span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.sr-desc {
+  font-size: 10px; letter-spacing: 0.01em; color: var(--cream-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sr-chip {
+  font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.1em;
+  color: var(--cream-mute); white-space: nowrap;
+}
+/* row state coloring */
+.setup-row[data-state="ok"] .sr-dot { background: var(--green); box-shadow: var(--glow-green); }
+.setup-row[data-state="ok"] .sr-chip { color: var(--green); }
+.setup-row[data-state="blocked"] { opacity: 0.6; }
+.setup-row[data-state="blocked"] .sr-dot { background: var(--cream-mute); box-shadow: none; }
+.setup-row[data-state="blocked"] .sr-chip { color: var(--cream-mute); }
+.setup-row[data-state="installing"] .sr-dot { background: var(--blue); box-shadow: var(--glow-blue); animation: led-pulse 1s ease-in-out infinite; }
+.setup-row[data-state="installing"] .sr-chip { color: var(--blue); }
+.setup-row[data-state="failed"] .sr-chip { color: var(--red); }
+
+.setup-install-btn {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em;
+  color: var(--amber);
+  border: 1px solid rgba(242, 163, 60, 0.45);
+  border-radius: 6px;
+  padding: 6px 12px; min-height: 29px;
   white-space: nowrap;
+  transition: all 0.15s var(--ease);
 }
+.setup-install-btn:hover:not(:disabled) {
+  background: rgba(242, 163, 60, 0.14); border-color: var(--amber); box-shadow: var(--glow-amber);
+}
+.setup-install-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.setup-install-btn.is-retry { color: var(--red); border-color: rgba(242, 97, 63, 0.5); }
+.setup-install-btn.is-retry:hover:not(:disabled) { background: rgba(242, 97, 63, 0.12); border-color: var(--red); box-shadow: none; }
+
+/* run-gate "OPEN SETUP" CTA - amber against the red gate so it reads as the fix */
+#run-gate-setup { flex: none; color: var(--amber); border-color: var(--amber); }
+#run-gate-setup:hover:not(:disabled) { background: rgba(242, 163, 60, 0.14); box-shadow: var(--glow-amber); }
+/* an env chip that is bad becomes a click-to-fix affordance */
+.env-chip.bad { cursor: pointer; }
+.env-chip.bad:hover { background: rgba(242, 97, 63, 0.12); border-color: var(--red); }
 
 .btn-small {
   font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.16em;
@@ -733,7 +820,7 @@ body[data-runtime="browser"] .tb-controls { display: none; }
   box-shadow: 0 0 18px rgba(242, 97, 63, 0.25);
 }
 
-/* missing-dependency RUN gate — same red banner idiom as #vad-banner */
+/* missing-dependency RUN gate - same red banner idiom as #vad-banner */
 #run-gate {
   display: flex; align-items: center; gap: 11px;
   border: 1px solid rgba(242, 97, 63, 0.4);
@@ -832,15 +919,14 @@ body[data-phase="running"] #run-btn { display: none; }
     gap: 14px;
   }
   .preset-rail,
-  .ops-tools,
-  .setup-list {
+  .ops-tools {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .setup-head {
     grid-template-columns: 1fr;
   }
   .setup-actions {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -848,14 +934,21 @@ body[data-phase="running"] #run-btn { display: none; }
   .out-actions,
   .preset-rail,
   .ops-tools,
-  .setup-actions,
-  .setup-list {
+  .setup-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  /* stack each dependency row so name/desc/action never collide */
+  .setup-row {
+    grid-template-columns: auto 1fr auto;
+    row-gap: 4px;
+  }
+  .setup-row .sr-desc { grid-column: 2 / -1; }
+  .setup-summary { grid-template-columns: auto 1fr; }
+  .setup-summary .setup-run-btn { grid-column: 1 / -1; justify-items: center; }
 }
 
 /* ════════════════════════════════════════════════════════════════
-   RACK — readout, VU, stage modules
+   RACK - readout, VU, stage modules
    ════════════════════════════════════════════════════════════════ */
 #rack {
   display: flex; flex-direction: column; gap: 14px;
@@ -1261,7 +1354,7 @@ body[data-phase="error"]   .readout-line { color: var(--red); }
   background: rgba(89, 198, 232, 0.08);
 }
 
-/* the reel — hero variant */
+/* the reel - hero variant */
 .clip.reel {
   border-color: rgba(242, 163, 60, 0.35);
   background:

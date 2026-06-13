@@ -436,8 +436,16 @@ def _separate_via_subprocess(input_audio_file: Path, output_dir: Path, separator
         subproc_env["CUDA_VISIBLE_DEVICES"] = ""
     timeout_s = _resolve_worker_timeout(timeout)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root),
-                                env=subproc_env, timeout=timeout_s)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(repo_root),
+            env=subproc_env,
+            timeout=timeout_s,
+        )
     except subprocess.TimeoutExpired:
         # subprocess.run already terminated the child on timeout; log + fall back like rc!=0.
         log.error(f"[bold red]audio-separator subprocess timed out after {timeout_s}s "

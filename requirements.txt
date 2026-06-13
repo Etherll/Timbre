@@ -1,11 +1,25 @@
 # Timbre Requirements
 #
-# Recommended install:
-#   pip install -r requirements.txt
+# ───────────────────────────── How to install ─────────────────────────────
 #
-# PyTorch CUDA 13.0 wheels are pulled from the PyTorch cu130 index below.
-# Current PyTorch command equivalent:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+# 1) GPU, ANY CUDA version (recommended — auto-detects your driver):
+#      pip install uv
+#      uv pip install -r requirements.txt --torch-backend=auto
+#    uv inspects your installed NVIDIA/AMD/Intel driver and pulls the matching
+#    PyTorch build (cu118 / cu126 / cu128 / cu130 / rocm6 / xpu), or falls back
+#    to CPU if no GPU is found. Works on Windows, Linux, and macOS. Pin a
+#    specific backend instead of auto with e.g. --torch-backend=cu128.
+#    (Requires uv >= 0.5.3. See https://docs.astral.sh/uv/guides/integration/pytorch/)
+#
+# 2) Plain pip (no uv):
+#      pip install -r requirements.txt
+#    This installs PyTorch from PyPI's default wheels: GPU (CUDA 13.0) on Linux,
+#    CPU-only on Windows and macOS. It never fails on driver mismatch, but
+#    Windows users who want GPU acceleration should use option 1, or install
+#    torch manually for their CUDA version first, e.g.:
+#      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+#    (swap cu128 for cu118 / cu126 / cu130 to match your driver), then run
+#    `pip install -r requirements.txt` for the rest.
 #
 # No Hugging Face token is required — every model source below is publicly downloadable
 # (audio-separator UVR models, NeMo nvidia/* models, FireRedTeam/FireRedVAD).
@@ -17,13 +31,15 @@ soundfile
 numpy
 tqdm
 
-# PyTorch with CUDA 13.0 support (automatically uses CPU if no GPU)
---index-url https://download.pytorch.org/whl/cu130
---extra-index-url https://pypi.org/simple
-
-torch
-torchvision
-torchaudio
+# PyTorch — NO index is pinned here on purpose, so this file works for everyone.
+# The accelerator (CPU / CUDA xx / ROCm) is chosen at install time:
+#   - `uv pip install ... --torch-backend=auto` picks the right CUDA build per machine
+#   - plain `pip install` uses PyPI defaults (CUDA on Linux, CPU on Windows/macOS)
+# See the install notes at the top of this file. Do not hardcode a cu130 index
+# here — that forces CUDA 13.0 (and its recent-driver requirement) on every user.
+torch>=2.6
+torchvision>=0.21
+torchaudio>=2.6
 
 # Audio processing and ML
 pyannote.core>=5.0          # light: Annotation/Timeline contract (NOT pyannote.audio)

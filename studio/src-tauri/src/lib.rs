@@ -697,7 +697,9 @@ Say 'installing Python packaging tools'
 
 if ($targets -contains 'requirements') {{
 Say 'installing Timbre requirements; this can take a long time on first run'
-& $uv pip install --python $py -r (Join-Path $repo 'requirements.txt')
+# --torch-backend=auto: uv probes the GPU/driver and pulls the matching PyTorch
+# build (cu118/cu126/cu128/cu130/rocm6/xpu), falling back to CPU if none is found.
+& $uv pip install --python $py --torch-backend=auto -r (Join-Path $repo 'requirements.txt')
 Set-Content -Path $requirementsMarker -Value (Get-Date -Format o)
 }}
 

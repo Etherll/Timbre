@@ -7,7 +7,7 @@ The refactored `timbre/` package is built so the two most common extensions —
 
 ```
 timbre/
-  cli.py            build_parser() — the single definition of the 28 CLI flags
+  cli.py            build_parser() — the single definition of the CLI flags
   config.py         ExtractorConfig (typed run config built from the CLI)
   constants.py      frozen defaults / weights / thresholds
   naming.py         filename + duration formatting (pure)

@@ -1,549 +1,384 @@
 # Timbre
 
-**Isolate, verify, and transcribe the clean solo speech of one target speaker from
-multi-speaker audio — and export a ready-to-train, word-safe TTS dataset.**
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](#requirements)
+[![Tauri v2](https://img.shields.io/badge/Timbre_Studio-Tauri_v2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](studio/)
+[![CUDA recommended](https://img.shields.io/badge/GPU-NVIDIA_16GB%2B_recommended-76B900?style=flat-square&logo=nvidia&logoColor=white)](#requirements)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square)](LICENSE)
 
-Timbre takes a long multi-speaker recording (interview, podcast, stream) plus a
-short reference clip of one person, and returns only that person's **non-overlapped,
-speaker-verified** speech: as polished WAV segments, transcripts, visualizations, and an
-LJSpeech-style TTS dataset whose clips never cut mid-word.
+**Extract one clean target voice from messy multi-speaker audio, then export a
+word-safe LJSpeech dataset ready for TTS training.**
 
-> **No Hugging Face token required.** Every model (audio-separator UVR models, NeMo
-> `nvidia/*` models, `FireRedTeam/FireRedVAD`) is publicly downloadable — there are no gated
-> repositories to request access to.
+[Studio](#desktop-app-timbre-studio) • [Colab](#google-colab) • [CLI](#command-line-quickstart) • [Features](#features) • [Output](#what-you-get) • [Troubleshooting](#troubleshooting) • [Contributing](#developer-notes)
 
-### Google Colab (GUI, no local install)
+![Timbre Studio idle screen](studio/docs/idle.png)
 
-Run it in the browser on a free **T4 GPU** — paste a YouTube link or upload a file, pick a
-reference clip in the form, and download a ready-to-train LJSpeech dataset:
+Timbre takes a long recording, podcast, stream, or interview plus one or more short
+reference clips of the target speaker. It separates vocals, diarizes speakers, removes
+overlap, verifies the target voice, transcribes the kept speech, and cuts the result into
+TTS-friendly clips whose boundaries are anchored in validated silence.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Etherll/Timbre/blob/main/Timbre_YouTube_to_TTS.ipynb)
+## Choose your path
 
-[`Timbre_YouTube_to_TTS.ipynb`](https://github.com/Etherll/Timbre/blob/main/Timbre_YouTube_to_TTS.ipynb)
-walks you through GPU check → install → input (YouTube/upload) → target + reference → run →
-preview → download, all as Colab form cells.
+| Path | Best for | Start here |
+| --- | --- | --- |
+| **Timbre Studio** | Local desktop extraction, YouTube pulls, reference picking, result review | [`studio/`](studio/) |
+| **Google Colab** | Trying Timbre on a free T4 GPU without local setup | [Open the shared Colab notebook](https://colab.research.google.com/drive/1_Gs-l1HXKBZK67SQidgtMVVreMvzIhUV?usp=sharing) |
+| **Command line** | Batch runs, scripting, reproducible datasets | [`python run_timbre.py`](#command-line-quickstart) |
 
-### Desktop app (Timbre Studio)
+## Desktop app: Timbre Studio
 
-A native desktop console for the pipeline lives in [`studio/`](studio/): drop a recording or
-paste a YouTube link, drop reference clips, press **RUN EXTRACTION**, and watch the real
-pipeline stages light up with a live log. On Windows release builds, **OUTPUT → SETUP**
-can provision the Timbre repo, managed Python environment, ffmpeg/ffprobe, yt-dlp, and
-FireRedVAD model under a folder you choose. For developer runs, you can still use your
-own repo checkout and Python install.
+Timbre Studio is a native desktop console for the pipeline. Drop an audio/video file or
+paste a YouTube link, add reference clips, press **RUN EXTRACTION**, and watch the real
+pipeline stages stream through the UI.
+
+Studio does not reimplement the ML stack. It shells out to `python run_timbre.py` in the
+repo root and keeps the GUI aligned with the same CLI contract tested by the Python suite.
+
+**What Studio gives you**
+
+- Input cards for local media, YouTube downloads, target name, output folder, and multiple
+  reference clips.
+- A voice-sample finder that uses the repo VAD stack to rank speech-heavy candidate clips.
+- One-click reference cleaning through the same vocal separator used by the pipeline.
+- Run presets: **BALANCED**, **QUICK CHECK**, **WORD SAFE**, and **LOW VRAM**.
+- A copyable command preview generated from the same pure settings helper as the run button.
+- A results browser for dataset clips, the concatenated solo reel, spectrograms, run
+  history, transcript filtering, and manifest copy actions.
+- On Windows release builds, **OUTPUT -> SETUP** can provision the managed repo, Python
+  environment, ffmpeg/ffprobe, yt-dlp, requirements, and FireRedVAD model under a folder
+  you choose.
+
+Run Studio from this checkout:
 
 ```bash
 cd studio
 npm install
-npm run tauri dev    # needs Node 20+ and Rust stable
+npm run tauri dev
 ```
 
----
+Build an installer:
 
-## Contents
-
-- [What it does](#what-it-does)
-- [How it works](#how-it-works)
-- [Tech stack](#tech-stack)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Download the VAD model](#download-the-vad-model)
-- [Prepare a reference clip](#prepare-a-reference-clip)
-- [Quickstart](#quickstart)
-- [CLI reference](#cli-reference)
-- [TTS dataset export](#tts-dataset-export)
-- [Output layout](#output-layout)
-- [Caveats & troubleshooting](#caveats--troubleshooting)
-- [Project layout](#project-layout)
-- [Testing](#testing)
-- [License](#license)
-- [Issues & contact](#issues--contact)
-
----
-
-## What it does
-
-- **Vocal separation** — [audio-separator](https://pypi.org/project/audio-separator/)
-  (UVR / Mel-Band RoFormer) strips music and effects so only speech remains.
-- **Speaker diarization** — NVIDIA NeMo **Sortformer** (`nvidia/diar_sortformer_4spk-v1`,
-  up to 4 speakers) decides who speaks when.
-- **Overlap handling** — overlapped speech is **derived directly from the diarization**
-  (regions where ≥2 speakers are active); there is no separate overlap model, and
-  overlapped regions are excluded so the output is true solo speech.
-- **Target identification** — matches diarized speakers to your reference clip with a
-  WeSpeaker Deep r-vector embedding.
-- **Multi-model verification** — each candidate segment is scored by WeSpeaker (r-vector +
-  gemini) and SpeechBrain ECAPA-TDNN, fused into one score with a configurable threshold.
-- **Voice activity** — FireRedVAD with an automatic Silero fallback, used to keep clip cuts
-  inside real silence.
-- **Transcription** — NVIDIA **Nemotron 3.5 ASR** (default) or OpenAI **Whisper** (fallback).
-- **Word-safe TTS dataset** — cuts the verified audio into clips that **never split a word**,
-  loudness-normalized and packaged in LJSpeech format with deterministic train/eval splits.
-- **Visualizations** — spectrograms and comparison plots for sanity checking.
-
-This program contains **zero telemetry**.
-
----
-
-## How it works
-
-The pipeline runs end-to-end from `run_timbre.py`. The active stage order is:
-
-```mermaid
-flowchart TD
-    A[Input audio + reference clip] --> P[Preflight checks + resume]
-    P --> S1[1. Reference prep -> 16k mono]
-    S1 --> S2[2. Vocal separation<br/>audio-separator / RoFormer]
-    S2 --> S3[3. Diarization<br/>NeMo Sortformer]
-    S3 --> S4[4. Overlap detection<br/>derived from diarization]
-    S4 --> S5[5. Identify target speaker<br/>WeSpeaker r-vector]
-    S5 --> S6[6. Slice + verify SOLO segments<br/>WeSpeaker + ECAPA fusion + VAD gate]
-    S6 --> S65[6.5 Classify & clean noisy<br/>only with --classify-and-clean]
-    S65 --> S7[7. Transcribe<br/>Nemotron / Whisper]
-    S7 --> S75[7.5 Write word-safe TTS dataset<br/>LJSpeech, on by default]
-    S75 --> S8[8. Concatenate verified SOLO audio]
-    S8 --> S9[9. Comparison spectrograms]
+```bash
+cd studio
+npm run tauri build
 ```
 
-Notes:
-- **Stage 2 (separation)** is skipped with `--skip-separation`, and is deferred to stage 6.5
-  when you pass `--classify-and-clean` (separate only the segments flagged noisy).
-- **Stage 7.5 (TTS export)** is **on by default**; opt out with `--no-export-tts`.
-- A **preflight** check runs first: missing *required* tools abort the run, while missing
-  *optional* tiers are auto-disabled with a log line so an unattended run never stalls.
-- With `--resume` (on by default) an already-completed `(input, target)` pair is skipped.
+Requirements for Studio development: **Node.js 20+** and **Rust stable**. See the full
+Studio guide in [`studio/README.md`](studio/README.md).
 
----
+## Google Colab
 
-## Tech stack
+Run Timbre in the browser on a free **T4 GPU**. Paste a YouTube link or upload a file,
+choose a reference clip, run the pipeline, preview the results, and download the dataset.
 
-| Area | Component |
-|------|-----------|
-| Vocal separation | `audio-separator` (UVR / Mel-Band RoFormer "Kim FT2") |
-| Diarization + overlap | NeMo Sortformer (`nvidia/diar_sortformer_4spk-v1`) |
-| Speaker ID | WeSpeaker Deep r-vector |
-| Verification | WeSpeaker (r-vector + gemini) + SpeechBrain ECAPA-TDNN, fused |
-| Voice activity | FireRedVAD (primary) + Silero (fallback) |
-| Transcription | NVIDIA Nemotron 3.5 ASR (default) / OpenAI Whisper (fallback) |
-| Frameworks | PyTorch, torchaudio, NeMo, librosa, soundfile, onnxruntime, ffmpeg |
-| Output | Verified WAV segments, transcripts (CSV/TXT), LJSpeech TTS dataset, spectrograms |
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1_Gs-l1HXKBZK67SQidgtMVVreMvzIhUV?usp=sharing)
 
----
+## Features
 
-## Requirements
+- **Target-speaker extraction**: provide one or more clean references; multiple references
+  are normalized and averaged into one target voice prototype.
+- **True solo speech**: overlap is derived from diarization and excluded so kept clips are
+  target-only regions.
+- **Modern public model stack**: audio-separator for vocal separation, NeMo Sortformer for
+  diarization, WeSpeaker and SpeechBrain ECAPA-TDNN for speaker verification, FireRedVAD
+  with Silero fallback for VAD, and Nemotron or Whisper for ASR.
+- **Word-safe TTS cutting**: acoustic silence is the cut authority. Force-split clips are
+  flagged and quarantined from the dataset by default.
+- **LJSpeech export by default**: writes `metadata.csv`, `train.csv`, `eval.csv`, and WAVs
+  under `dataset/`; optional `metadata.jsonl` is available with `--dataset-format
+  ljspeech+jsonl`.
+- **Quality gate**: rejects clips that are too short/long, clipping, empty-transcript,
+  unverified, or not silence-validated.
+- **Unattended-run safety**: required resources fail loudly before the batch; optional tiers
+  auto-disable with a log line instead of stalling the run.
+- **Resume support**: completed runs are tracked so repeated work can be skipped; reference
+  paths and target name are part of the completion key.
+- **No telemetry**: nothing is phoned home by Timbre itself.
 
-- **OS:** Linux (Debian/Ubuntu tested) or Windows. macOS works for CPU-only paths.
-- **Python:** 3.10+
-- **GPU:** NVIDIA GPU with **≥ 16 GB VRAM** recommended for the full pipeline. CPU works but
-  is slow; low-VRAM cards can use `--low-vram` and `--asr-precision`.
-- **System tools:** `ffmpeg` and `ffprobe` on `PATH`.
+## Command-line quickstart
 
-On Debian/Ubuntu, install the system dependencies NeMo needs first:
+### 1. Install system tools
+
+Install `ffmpeg` and `ffprobe` and make sure both are on `PATH`.
+
+On Debian/Ubuntu:
 
 ```bash
 sudo apt-get install -y libsndfile1 ffmpeg
 pip install Cython packaging
 ```
 
----
-
-## Installation
-
-> [!IMPORTANT]
-> **Windows users:** Run **Command Prompt, PowerShell, or Windows Terminal as Administrator**
-> before installing Timbre or running it for the first time.
->
-> Some dependencies (especially SpeechBrain model caching/downloads) create **symbolic links**
-> on Windows. Without Administrator privileges (or Windows Developer Mode enabled),
-> symlink creation can fail and cause model download or initialization errors.
+### 2. Install Python dependencies
 
 ```bash
 git clone https://github.com/Etherll/Timbre.git
 cd Timbre
-python -m venv .venv && source .venv/bin/activate   # optional but recommended
+python -m venv .venv
+```
+
+Activate the environment:
+
+```bash
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+Install the ML stack:
+
+```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` installs PyTorch from the CUDA 13.0 index plus NeMo, WeSpeaker,
-SpeechBrain, audio-separator, FireRedVAD, and Whisper. NeMo powers both diarization
-(Sortformer) and the default ASR backend; if you only want Whisper for transcription, you can
-still run with `--asr-backend whisper`.
+> [!IMPORTANT]
+> On Windows, run your terminal as Administrator or enable Windows Developer Mode before
+> first installing/running Timbre. Some model caches create symlinks, and Windows can block
+> those without elevated privileges.
 
-> There is no `pip install .` / console script. The tool is run directly:
-> `python run_timbre.py ...`.
+### 3. Download FireRedVAD once
 
----
-
-## Download the VAD model
-
-FireRedVAD is downloaded once from its public repo (no token). The default
-`--vad-model-dir` is `pretrained_models/FireRedVAD/VAD`:
+The default VAD path is `pretrained_models/FireRedVAD/VAD`.
 
 ```bash
+pip install huggingface_hub
 hf download FireRedTeam/FireRedVAD --local-dir pretrained_models/FireRedVAD
 ```
 
-If FireRedVAD is unavailable or misbehaves on your stack, the default `--vad-backend auto`
-falls back to **Silero VAD** automatically — see [Caveats](#caveats--troubleshooting). The
-separator and ASR models download themselves on first use.
+### 4. Run a smoke extraction
 
----
+```bash
+python run_timbre.py \
+  --input-audio "podcast.wav" \
+  --reference-audio "ref_01.wav" "ref_02.wav" \
+  --target-name "Host" \
+  --dry-run
+```
 
-## Prepare a reference clip
+Remove `--dry-run` for a full run:
 
-You need a short, clean, single-speaker sample of your target. `extract_reference.py` pulls
-the audio from any media file and splits it on silence into individual utterance WAV clips
-plus a `manifest.csv` — handy for finding a clean sample. It is **FFmpeg-only** (no GPU / no
-ML dependencies) and does **not** run the pipeline.
+```bash
+python run_timbre.py -i "podcast.wav" -r "host_ref.wav" -n "Host"
+```
+
+## Prepare reference clips
+
+You need one or more short, clean samples of the target speaker. `extract_reference.py`
+is an FFmpeg-only helper that splits a media file on silence and writes candidate clips
+plus a `manifest.csv`.
 
 ```bash
 python extract_reference.py -i interview.mp4
 python extract_reference.py -i interview.mp4 -o ref_clips --min-clip 3 --max-clip 15
 python extract_reference.py -i interview.mp4 --longest-first --limit 5
-python extract_reference.py -i interview.mp4 --list-only   # write manifest only, no WAVs
+python extract_reference.py -i interview.mp4 --list-only
 ```
 
-Then pick the cleanest clip and pass it as `--reference-audio`.
-
-<details>
-<summary><b><code>extract_reference.py</code> flags</b></summary>
-
-| Flag | Alias | Default | Purpose |
-|------|-------|---------|---------|
-| `--input` | `-i` | (required) | Input video / media file. |
-| `--output-dir` | `-o` | `<input_stem>_reference_clips` | Output directory for clips. |
-| `--noise-db` | | `-30.0` | Silence threshold in dBFS; quieter counts as silence. |
-| `--min-silence` | | `0.5` | Minimum silence (s) that splits two utterances. |
-| `--min-clip` | | `1.0` | Minimum clip length to keep (s). |
-| `--max-clip` | | `0.0` | If > 0, split clips longer than this (s) into equal sub-clips (`0` = off). |
-| `--pad` | | `0.1` | Padding (s) added around each clip. |
-| `--sr` | | `16000` | Output WAV sample rate (Hz). |
-| `--channels` | | `1` | Output channel count (`1` = mono). |
-| `--limit` | | `0` | Export at most N clips (`0` = all). |
-| `--longest-first` | | off | Order clips longest-first before `--limit`. |
-| `--list-only` | | off | Detect + write `manifest.csv` only; no WAVs. |
-
-`manifest.csv` is comma-delimited **with** a header (`start_s,end_s,duration_s,filename`).
-</details>
-
----
-
-## Quickstart
-
-Minimum required arguments:
+Then pass the best clip or clips after `--reference-audio`:
 
 ```bash
-python run_timbre.py \
-    --input-audio "path/to/input_audio.wav" \
-    --reference-audio "path/to/target_sample.wav" \
-    --target-name "TargetName"
+python run_timbre.py -i "interview.wav" -r "ref_a.wav" "ref_b.wav" -n "Guest"
 ```
 
-A more complete example:
+## What you get
 
-```bash
-python run_timbre.py \
-    -i "podcast.wav" \
-    -r "host_reference.wav" \
-    -n "Host" \
-    --output-base-dir "./output_runs" \
-    --asr-backend nemotron \
-    --vad-backend auto \
-    --verification-threshold 0.7
-```
+Each run writes to:
 
-Quick smoke test (processes only the first ~60 s):
-
-```bash
-python run_timbre.py -i in.wav -r ref.wav -n Target --dry-run
-```
-
----
-
-## CLI reference
-
-The full, authoritative flag list lives in `timbre/cli.py` (and `--help`). Defaults
-below are exact.
-
-### Required
-
-| Flag | Alias | Purpose |
-|------|-------|---------|
-| `--input-audio` | `-i` | Main input audio file. |
-| `--reference-audio` | `-r` | Clean reference clip of the target speaker. |
-| `--target-name` | `-n` | Name for the target speaker (used in output paths). |
-
-### Paths & output
-
-| Flag | Alias | Default | Purpose |
-|------|-------|---------|---------|
-| `--output-base-dir` | `-o` | `./output_runs` | Base directory for all output. |
-| `--output-sr` | | `44100` | Sample rate (Hz) of the final concatenated SOLO audio. |
-
-### Models
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--separator-model` | `mel_band_roformer_kim_ft2_unwa.ckpt` | audio-separator model filename. |
-| `--separator-model-dir` | `pretrained_models/audio-separator` | Directory for the separator checkpoint. |
-| `--wespeaker-rvector-model` | `english` | WeSpeaker r-vector model for speaker ID (`english`/`chinese`/path). |
-| `--wespeaker-gemini-model` | `english` | WeSpeaker model for verification (`english`/`chinese`/path). |
-| `--diar-model` | `nvidia/diar_sortformer_4spk-v1` | NeMo Sortformer diarization model (≤4 speakers). |
-| `--asr-backend` | `nemotron` | ASR backend: `nemotron` (default) or `whisper`. |
-| `--nemotron-model` | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Nemotron ASR model id (with `--asr-backend nemotron`). |
-| `--whisper-model` | `large-v3` | Whisper model name (with `--asr-backend whisper`). |
-| `--vad-backend` | `auto` | Voice-activity backend: `firered`, `silero`, or `auto` (FireRedVAD then Silero fallback). |
-| `--vad-model-dir` | `pretrained_models/FireRedVAD/VAD` | Local FireRedVAD model directory. |
-| `--embedding-backend` | `wespeaker` | Target embedding backend: `wespeaker`, `ecapa`, or `titanet`. |
-
-### Processing control
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--language` | `en` | Language code (`en`/`es`/`auto`…); mapped to a Nemotron locale, passed to Whisper directly. |
-| `--diar-hyperparams` | `{}` | JSON string of extra diarizer kwargs (advanced). |
-| `--skip-separation` | off | Skip vocal separation; use the original audio downstream. |
-| `--disable-speechbrain` | off | Disable SpeechBrain ECAPA-TDNN verification. |
-| `--skip-rejected-transcripts` | off | Don't transcribe verification-rejected segments. |
-| `--classify-and-clean` | off | Classify clean/noisy and run the separator only on noisy segments. |
-| `--concat-silence` | `0.25` | Silence (s) between concatenated SOLO segments. |
-| `--preload-whisper` | off | Pre-load Whisper at startup. |
-
-### SOLO segment tuning
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--min-duration` | `1.0` | Minimum duration (s) for a SOLO segment to be kept. |
-| `--merge-gap` | `0.25` | Maximum gap (s) between segments to merge them. |
-| `--verification-threshold` | `0.7` | Minimum fused verification score (0–1). |
-| `--noise-threshold` | `0.7` | Cleanliness threshold for `--classify-and-clean`. |
-
-### Word-safe segmentation (Tier-1)
-
-| Flag | Aliases | Default | Purpose |
-|------|---------|---------|---------|
-| `--seg-min-length` | `--seg-min-dur` | `3.0` | Accumulate ≥ this many seconds before a soft cut. |
-| `--seg-max-length` | `--seg-max-dur` | `15.0` | Preferred max clip duration (s); cut at the next silence. |
-| `--seg-hard-max` | `--seg-hard-max-dur` | `20.0` | Hard max (s); force a cut at the quietest frame by here. |
-| `--seg-min-silence` | | `0.30` | Minimum silence-run length (s) to qualify as a cut boundary. |
-| `--seg-silence-thresh` | | `-38.0` | Silence threshold (dBFS). |
-| `--seg-pad-ms` | | `150.0` | Silence padding (ms) kept on each side of a clip. |
-| `--seg-snap-tol` | | `0.75` | Max distance (s) a boundary may move to reach a validated silence. |
-| `--word-align` | | off | Enable Tier-2 forced alignment (NeMo NFA). Opt-in. |
-
-### TTS dataset export
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--export-tts` / `--no-export-tts` | **on** | Write / skip the LJSpeech TTS dataset. |
-| `--tts-sr` | `24000` | Sample rate (Hz) of exported dataset wavs (distinct from `--output-sr`). |
-| `--dataset-format` | `ljspeech` | `ljspeech` or `ljspeech+jsonl` (also emit `metadata.jsonl`). |
-| `--loudness-target` | `-23.0` | Export loudness target (LUFS), applied last via pyloudnorm. |
-| `--eval-fraction` | `0.10` | Fraction of clips placed in the deterministic, disjoint eval split. |
-| `--max-clips-per-file` | `10000` | Per-input-file cap on emitted clips. |
-| `--resume` / `--no-resume` | **on** | Skip / reprocess input files already in the completed manifest. |
-
-### Quality-filter gate
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--qf-min-dur` | `1.0` | Reject exported clips shorter than this (s). |
-| `--qf-max-dur` | `15.0` | Reject exported clips longer than this (s). |
-| `--qf-dnsmos` | `None` (off) | DNSMOS P.835 OVRL floor. **Experimental** — currently auto-disabled (see caveats). |
-| `--allow-unvalidated-clips` | off | Include clips whose boundaries couldn't be silence-validated (default: quarantined). |
-
-### Optional accuracy tiers
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--separation-tier` | off | Opt-in HQ separation tier; auto-disabled if the model is unavailable. |
-| `--dnsmos-filter` | off | Opt-in DNSMOS quality filter; **experimental**, auto-disabled if the weight is unavailable. |
-
-### Memory / VRAM policy
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--device` | `auto` | Compute device: `auto`, `cuda`, or `cpu`. |
-| `--vram-budget` | `None` | Free-VRAM (GB) under which the low-memory policy auto-selects (~10 GB threshold). |
-| `--low-vram` | off | Force the low-memory policy (load verification late, free per stage). |
-| `--asr-precision` | `fp32` | ASR-only precision: `fp32`, `auto`, `bf16`, `fp16` (never affects verification). |
-
-### Unattended-run safety & debugging
-
-| Flag | Alias | Default | Purpose |
-|------|-------|---------|---------|
-| `--worker-timeout` | | `1800.0` | Wall-clock timeout (s) for an isolated worker subprocess (separation/ASR); `0` disables. |
-| `--dry-run` | `-d` | off | Limit diarization to the first 60 s for a quick test. |
-| `--debug` | | off | Verbose DEBUG logging and fuller tracebacks. |
-| `--keep-temp-files` | | off | Keep the temporary processing directory. |
-
----
-
-## TTS dataset export
-
-Alongside the legacy concatenated SOLO output, every run writes a ready-to-train **TTS
-dataset by default**. It is built from the same verified target-speaker audio, but cut so a
-clip **never ends mid-word**.
-
-### How the cut authority works
-
-- **Acoustic silence decides every cut.** A clip boundary is only ever placed inside a
-  *validated silence* — a region that is both acoustically quiet **and** not covered by any
-  VAD speech span — at the quietest frame of that silence. By default the segmenter cuts at
-  the first qualifying silence that also lands inside the target duration band
-  (`--seg-min-length` … `--seg-max-length`).
-- **Optional sentence-aware alignment** via `--word-align` (Tier-2, NeMo forced alignment):
-  alignment *proposes* natural sentence stops, but acoustic silence still *disposes* — so a
-  word is never split.
-- **Force-split clips are quarantined by default.** The only boundary that may not land in a
-  validated silence is an explicit hard-max force-split. Those clips are flagged
-  `silence_validated=False` and excluded from the dataset, so it contains zero mid-word
-  clips. Pass `--allow-unvalidated-clips` to include them.
-
-### Output layout
-
-The dataset is written to `<output-base-dir>/<run>/dataset/`:
-
-```
-dataset/
-  metadata.csv          id|transcript|normalized_transcript   (pipe-delimited, NO header)
-  metadata.jsonl        NeMo-style superset (only with --dataset-format ljspeech+jsonl)
-  wavs/<TargetName>/<id>.wav   mono 16-bit PCM @ --tts-sr (default 24000), loudness applied last
-  train.csv             deterministic split (always written)
-  eval.csv              disjoint eval split (always written, ~--eval-fraction, no clip overlap)
-  .completed.json       resumable per-input manifest (re-runs skip completed files)
-```
-
-- `metadata.csv` is **pipe-delimited with no header**; `train.csv`/`eval.csv` are **always**
-  emitted (not gated on `--dataset-format`). `metadata.jsonl` is the only format-gated file.
-- Clips are loudness-normalized to `--loudness-target` (default **−23 LUFS**) as the very
-  last step before the 16-bit write.
-
-### Quality filtering
-
-Each candidate clip passes a quality gate before entering the dataset. A clip is **rejected**
-if it: falls outside the duration band (`--qf-min-dur` … `--qf-max-dur`), is clipping or
-exceeds the true-peak ceiling, has an empty/whitespace transcript (or one that normalizes to
-empty), failed speaker verification, or — by default — was a force-split that could not be
-silence-validated. Kept/rejected counts are logged per reason. The DNSMOS floor
-(`--qf-dnsmos`) is checked only when set and the scorer is available; it never crashes the
-run (see caveats).
-
----
-
-## Output layout
-
-Each run creates `<output-base-dir>/<TargetName>_<input-stem>_extracted/`:
-
-```
-<TargetName>_<input>_extracted/
+```text
+<output-base-dir>/<TargetName>_<input-stem>_extracted/
   separated_vocals/                  separated speech track
-  target_segments_solo/             verified SOLO segment WAVs
-  transcripts_solo_verified/        transcripts for verified segments (CSV/TXT)
-  transcripts_solo_rejected/        transcripts for rejected segments (unless skipped)
-  concatenated_audio_solo_verified/ single concatenated SOLO WAV @ --output-sr
-  dataset/                          LJSpeech TTS dataset (see above)
-  visualizations/                   spectrograms and comparison plots
-  __tmp_processing/                 working dir (removed unless --keep-temp-files)
+  target_segments_solo/              verified SOLO segment WAVs
+  transcripts_solo_verified/         transcripts for accepted clips
+  transcripts_solo_rejected/         transcripts for rejected clips, unless skipped
+  concatenated_audio_solo_verified/  one continuous solo reel
+  dataset/                           LJSpeech TTS dataset
+  visualizations/                    spectrograms and comparison plots
+  __tmp_processing/                  temp files, removed unless --keep-temp-files
 ```
 
----
+The dataset layout is:
 
-## Caveats & troubleshooting
-
-These are real, code-level behaviors worth knowing — the project favors being honest over
-over-claiming.
-
-- **VAD: FireRedVAD can be unreliable; Silero is the safety net.** On some stacks FireRedVAD
-  returns empty or raises, which (under the fail-closed word-safe gate) would quarantine
-  every clip. The default `--vad-backend auto` tries FireRedVAD first and falls back to Silero
-  automatically. If you hit VAD issues, force `--vad-backend silero`. A working VAD is
-  required for word-safe cutting.
-- **WeSpeaker needs a torchaudio compatibility shim.** The default `wespeaker` embedding
-  backend is kept working via a load-bearing shim for newer torchaudio (2.x, ≥ 2.7 here),
-  which removed `set_audio_backend` and routes `torchaudio.load` through TorchCodec. If you'd rather avoid
-  WeSpeaker entirely, use `--embedding-backend ecapa` (SpeechBrain ECAPA-TDNN, already a
-  dependency) or `titanet` (NeMo TitaNet-Large).
-- **Verification fusion re-normalizes.** The fused score weights WeSpeaker r-vector / ECAPA /
-  gemini at 0.4 / 0.3 / 0.3. If a model fails to load, its weight is dropped and the
-  remaining weights re-normalize — so one missing model (e.g. ECAPA) does not silently reject
-  every clip. Default threshold is `--verification-threshold 0.7`.
-- **Optional tiers are opt-in and auto-disable when weights are missing.** The preflight check
-  auto-disables `--word-align` (Tier-2 forced alignment), `--separation-tier`, and
-  `--dnsmos-filter` with a clear log line if their dependency/weight is absent, so a missing
-  optional model never stalls an unattended run.
-- **DNSMOS is experimental.** `--dnsmos-filter` / `--qf-dnsmos` will currently auto-disable
-  (the DNSMOS scorer module isn't shipped yet); the import is guarded, so requesting it logs a
-  warning and the run continues without it.
-- **Nemotron decoder.** The Nemotron RNNT CUDA-graph decoder is disabled once at model load
-  (its captured graph aborts on the second chunk otherwise); transcription then runs reliably
-  on the graph-free greedy path.
-- **Separation needs a valid checkpoint.** Vocal separation requires the separator model to
-  be present and valid; otherwise skip it with `--skip-separation`.
-- **What the defaults buy you:** the project's existing model accuracy **plus** word-safe
-  cutting and the TTS dataset export. This is not a per-stage accuracy boost — the upstream
-  diarization/verification/ASR models are unchanged.
-
----
-
-## Project layout
-
-```
-Timbre/
-  run_timbre.py          # active entry point: parses the CLI and runs stages 0–9
-  extract_reference.py      # FFmpeg-only reference-clip helper (no GPU/ML)
-  audio_pipeline.py         # heavy pipeline implementation + torchaudio/WeSpeaker shims
-  common.py                 # shared utilities (logging, filenames, spectrograms)
-  requirements.txt
-  timbre/          # package
-    cli.py                  # single source of truth for the argument parser
-    config.py               # typed ExtractorConfig from CLI args
-    constants.py            # frozen behavioral constants (fusion weights, thresholds)
-    separation.py           # vocal separation (audio-separator / UVR)
-    diarization.py          # NeMo Sortformer diarization + overlap derivation
-    vad.py                  # FireRedVAD + Silero resilient VAD
-    transcription.py        # Nemotron / Whisper ASR
-    embedding.py            # pluggable speaker-embedding backends
-    verification.py         # re-normalizing verification score fusion
-    word_safe_segmenter.py  # Tier-1 word-safe segmenter (silence = cut authority)
-    dataset_export.py       # LJSpeech TTS writer, quality gate, resumable manifest
-    preflight.py            # fail-loud required checks + auto-disable optional tiers
-    runtime.py              # memory/VRAM policy
-    naming.py, segments.py  # pure helpers
-    audio/, models/, pipeline/, stages/   # math helpers, adapters, staged orchestration
-  tests/                    # ~30 test modules + golden CLI contract
-  docs/EXTENDING.md
+```text
+dataset/
+  metadata.csv                         id|transcript|normalized_transcript, no header
+  metadata.jsonl                       optional, with --dataset-format ljspeech+jsonl
+  wavs/<TargetName>/<id>.wav           mono 16-bit PCM @ --tts-sr, default 24000
+  train.csv                            deterministic training split
+  eval.csv                             deterministic disjoint eval split
+  .completed.json                      resumable completion manifest
 ```
 
----
+`metadata.csv`, `train.csv`, and `eval.csv` are always pipe-delimited with no header.
+Loudness normalization is applied last, with a default target of `-23 LUFS`.
 
-## Testing
+## How it works
 
-The repository ships a test suite (golden CLI contract, score-fusion, VAD fallback,
-preflight, dataset export, word-safe segmentation, and more):
+The active pipeline is hard-wired in `run_timbre.py`. The stage protocol under
+`timbre/pipeline/` exists for the future orchestration shape but is not the active
+execution path yet.
+
+```mermaid
+flowchart TD
+    A["Input audio + reference clip(s)"] --> P["Preflight + resume check"]
+    P --> S1["1. Reference prep"]
+    S1 --> S2["2. Vocal separation"]
+    S2 --> S3["3. Diarization"]
+    S3 --> S4["4. Overlap removal"]
+    S4 --> S5["5. Identify target speaker"]
+    S5 --> S6["6. Slice + verify solo speech"]
+    S6 --> S65["6.5 Optional noisy-clip cleaning"]
+    S65 --> S7["7. Transcribe"]
+    S7 --> S75["7.5 Export word-safe TTS dataset"]
+    S75 --> S8["8. Concatenate verified solo reel"]
+    S8 --> S9["9. Generate visualizations"]
+```
+
+### Model stack
+
+| Stage | Default |
+| --- | --- |
+| Vocal separation | `audio-separator`, Mel-Band RoFormer `mel_band_roformer_kim_ft2_unwa.ckpt` |
+| Diarization | NeMo Sortformer `nvidia/diar_sortformer_4spk-v1` |
+| Target speaker ID | WeSpeaker Deep r-vector |
+| Verification | WeSpeaker r-vector + WeSpeaker gemini + SpeechBrain ECAPA-TDNN |
+| VAD | FireRedVAD, with Silero fallback when using `--vad-backend auto` |
+| ASR | NVIDIA Nemotron 3.5 ASR, or Whisper with `--asr-backend whisper` |
+| Dataset export | LJSpeech writer in `timbre/dataset_export.py` |
+
+Verification fusion uses the fixed weights `rvector=0.4`, `ecapa=0.3`, `gemini=0.3`.
+If a verifier is unavailable, its weight is dropped and the remaining scores are
+renormalized instead of silently rejecting every clip.
+
+## Useful CLI flags
+
+Run `python run_timbre.py --help` for the full, tested CLI contract.
+
+| Task | Flags |
+| --- | --- |
+| Pick input/reference/target | `-i/--input-audio`, `-r/--reference-audio`, `-n/--target-name` |
+| Change output folder | `-o/--output-base-dir` |
+| Fast smoke run | `--dry-run` |
+| Skip separation | `--skip-separation` |
+| Clean only noisy clips | `--classify-and-clean` |
+| ASR backend | `--asr-backend nemotron` or `--asr-backend whisper` |
+| Speaker embedding backend | `--embedding-backend wespeaker`, `ecapa`, or `titanet` |
+| VAD backend | `--vad-backend auto`, `firered`, or `silero` |
+| Word-safe timing | `--seg-min-length`, `--seg-max-length`, `--seg-hard-max`, `--seg-snap-tol` |
+| Optional forced alignment | `--word-align` |
+| Dataset export | `--export-tts`, `--no-export-tts`, `--tts-sr`, `--dataset-format` |
+| Quality filter | `--qf-min-dur`, `--qf-max-dur`, `--allow-unvalidated-clips` |
+| Low-memory run | `--low-vram`, `--device`, `--vram-budget`, `--asr-precision` |
+| Resume control | `--resume`, `--no-resume` |
+
+## Requirements
+
+- **Python:** 3.10+
+- **System tools:** `ffmpeg` and `ffprobe`
+- **GPU:** NVIDIA GPU with 16 GB VRAM recommended for the full ML pipeline
+- **CPU-only:** supported for some paths, but full extraction is slow
+- **Studio development:** Node.js 20+ and Rust stable
+- **Network:** needed on first run to download model weights
+
+The automated test suite is CPU-only and stubs heavy ML modules; real inference should be
+validated manually on a GPU machine after changing separation, diarization, verification,
+VAD, ASR, or export-stage behavior.
+
+## Troubleshooting
+
+**FireRedVAD missing**
+
+Preflight requires the FireRedVAD directory to exist and be non-empty. Download it once:
 
 ```bash
-pip install pytest
-pytest
+hf download FireRedTeam/FireRedVAD --local-dir pretrained_models/FireRedVAD
 ```
 
----
+If FireRedVAD itself behaves poorly on your stack, keep the model present and run with
+`--vad-backend silero`.
+
+**Windows model-cache or symlink errors**
+
+Run PowerShell, Command Prompt, or Windows Terminal as Administrator, or enable Windows
+Developer Mode.
+
+**Low VRAM**
+
+Try:
+
+```bash
+python run_timbre.py -i in.wav -r ref.wav -n Target --low-vram --skip-separation
+```
+
+You can also reduce ASR memory pressure with `--asr-precision auto`.
+
+**Optional tiers disappear**
+
+`--word-align`, `--separation-tier`, and `--dnsmos-filter` are optional. If their
+dependencies or weights are unavailable, preflight logs the auto-disable and continues.
+
+**DNSMOS**
+
+DNSMOS is experimental in this repo. The scorer import is guarded, so requesting it should
+not crash the run.
+
+**Separator checkpoint**
+
+Separation requires a valid audio-separator checkpoint. If you only need a quick run, use
+`--skip-separation`.
+
+## Developer notes
+
+The project intentionally has no package installer or console script. Run it directly:
+
+```bash
+python run_timbre.py --help
+```
+
+Run tests:
+
+```bash
+python -m pytest tests -q
+```
+
+Run Studio tests/build checks:
+
+```bash
+cd studio
+npm test
+npm run build
+```
+
+Useful files:
+
+```text
+run_timbre.py                 active end-to-end runner
+extract_reference.py          FFmpeg-only reference-clip helper
+audio_pipeline.py             heavy pipeline implementation
+timbre/cli.py                 single source of truth for CLI flags
+timbre/config.py              typed runtime config
+timbre/word_safe_segmenter.py silence/VAD cut authority
+timbre/dataset_export.py      LJSpeech writer and quality gate
+timbre/preflight.py           fail-loud/fail-soft capability checks
+studio/                       Tauri desktop app
+docs/EXTENDING.md             extension points for models, stages, filters
+tests/                        characterization net and golden CLI contract
+```
+
+When changing the CLI, update `timbre/cli.py` and the golden help snapshot in
+`tests/golden/cli_help.txt` deliberately.
+
+When changing ML inference stages, run the CPU tests and then do a manual Tier-2 GPU
+check: real audio in, verified clips out, transcripts present, dataset written, and
+accept/reject decisions plausible.
 
 ## License
 
-Licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE) for the full
-text and [`NOTICE`](NOTICE) for third-party attributions. You may use, modify, and
-redistribute this software under the terms of that license.
+Timbre is licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE)
+and [`NOTICE`](NOTICE).
 
 Copyright 2026 Reis Cook.
 
----
+## Issues and contact
 
-## Issues & contact
-
-If you hit a problem or have a suggestion:
-
-- Open an issue on GitHub.
-- Email: reiscook@gmail.com
-
-This program contains zero telemetry — your feedback is what makes it better.
+Open an issue on GitHub or email `mrmrmidoessam@gmail.com`.

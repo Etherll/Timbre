@@ -8,7 +8,7 @@ step of the refactor; a red test means behavior drifted.
 ```
 python -m pytest tests/ -q
 ```
-Current baseline: **71 passed, 2 skipped** (the 2 skips are refactor targets — see below).
+Current baseline: **479 passed, 2 skipped** (the 2 skips are refactor targets — see below).
 
 ## What is covered (Tier 1 — automated, CPU, no network)
 
@@ -18,7 +18,7 @@ Current baseline: **71 passed, 2 skipped** (the 2 skips are refactor targets —
 | `test_segments.py` | REAL `merge_nearby_segments` (inclusive `<=` gap boundary), `filter_segments_by_duration` (inclusive `>=`), `get_target_solo_timeline` (extrude semantics) |
 | `test_filename_contract.py` | Segment filename encoding `f"{x:.3f}".replace('.', 'p')` → `solo_temp_verif_0003_1p500s_to_2p750s` |
 | `test_score_combination.py` | Verification fusion `(rvec·0.4 + ecapa·0.3 + gemini·0.3) · vad_factor`, VAD penalty 0.1 |
-| `test_cli_contract.py` | All 28 CLI flags, `--help` golden snapshot (`tests/golden/cli_help.txt`), missing-arg exit code 2 |
+| `test_cli_contract.py` | All CLI flags, `--help` golden snapshot (`tests/golden/cli_help.txt`), missing-arg exit code 2 |
 
 The suite passed an adversarial break-and-restore audit (mutating the real source made
 the relevant tests fail), so the assertions are genuine — not fakes.

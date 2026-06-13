@@ -49,7 +49,7 @@
                 <rect x="21" y="9"  width="3" height="16" rx="1.5"/>
                 <rect x="27" y="13" width="3" height="8"  rx="1.5"/>
               </svg>
-              <p class="dropwell-line">Drop a recording <span class="dim">— audio or video —</span></p>
+              <p class="dropwell-line">Drop a recording <span class="dim">- audio or video -</span></p>
               <p class="dropwell-hint mono">or <button class="linkish" id="source-browse">browse files</button></p>
             </div>
             <div class="filechip" id="source-chip" hidden>
@@ -98,7 +98,7 @@
 
           <div class="genrow">
             <button class="btn-small" id="gen-btn" disabled>◌ FIND VOICE SAMPLES</button>
-            <span class="genhint mono">scans the source for clean solo speech — listen &amp; pick</span>
+            <span class="genhint mono">scans the source for clean solo speech - listen &amp; pick</span>
           </div>
 
           <section id="cands" hidden>
@@ -151,16 +151,24 @@
 
           <div class="setup-panel" id="setup-panel" hidden>
             <div class="setup-head">
-              <div>
+              <div class="setup-head-id">
                 <span class="field-label mono">MANAGED INSTALL</span>
                 <span class="setup-dir mono" id="setup-dir-val"></span>
+                <span class="setup-note mono" id="setup-note">A self-contained runtime in this folder - kept separate from any Python already on your system.</span>
               </div>
               <div class="setup-actions">
                 <button class="btn-small ghost" id="setup-change">PATH</button>
-                <button class="btn-small ghost" id="setup-refresh">CHECK</button>
-                <button class="btn-small" id="setup-run">INSTALL / REPAIR</button>
+                <button class="btn-small ghost" id="setup-refresh">RE-CHECK</button>
                 <button class="btn-small ghost" id="setup-adopt" disabled>USE</button>
               </div>
+            </div>
+            <div class="setup-summary" id="setup-summary" data-tone="missing">
+              <span class="ss-led" aria-hidden="true"></span>
+              <span class="ss-text mono" id="setup-summary-text">Checking what's installed…</span>
+              <button class="setup-run-btn" id="setup-run">
+                <span class="srb-label">INSTALL MISSING</span>
+                <span class="srb-sub mono">everything you need, in order</span>
+              </button>
             </div>
             <ul class="setup-list mono" id="setup-list"></ul>
           </div>
@@ -172,37 +180,37 @@
               <label class="field">
                 <span class="field-label mono">DEVICE</span>
                 <select id="adv-device">
-                  <option value="auto">auto — CUDA if available</option>
-                  <option value="cuda">cuda — force GPU</option>
-                  <option value="cpu">cpu — slow fallback</option>
+                  <option value="auto">auto - CUDA if available</option>
+                  <option value="cuda">cuda - force GPU</option>
+                  <option value="cpu">cpu - slow fallback</option>
                 </select>
               </label>
               <label class="switch">
                 <input type="checkbox" id="adv-lowvram" />
                 <span class="switch-track"></span>
-                <span class="switch-text">Low VRAM <span class="dim">— free models per stage</span></span>
+                <span class="switch-text">Low VRAM <span class="dim">- free models per stage</span></span>
               </label>
 
               <span class="adv-group mono">MODELS</span>
               <label class="field">
                 <span class="field-label mono">ASR BACKEND</span>
                 <select id="adv-asr">
-                  <option value="nemotron">nemotron — NVIDIA streaming</option>
-                  <option value="whisper">whisper — large-v3</option>
+                  <option value="nemotron">nemotron - NVIDIA streaming</option>
+                  <option value="whisper">whisper - large-v3</option>
                 </select>
               </label>
               <label class="field">
                 <span class="field-label mono">EMBEDDING</span>
                 <select id="adv-embed">
-                  <option value="wespeaker">wespeaker — default</option>
-                  <option value="ecapa">ecapa — SpeechBrain</option>
-                  <option value="titanet">titanet — NeMo</option>
+                  <option value="wespeaker">wespeaker - default</option>
+                  <option value="ecapa">ecapa - SpeechBrain</option>
+                  <option value="titanet">titanet - NeMo</option>
                 </select>
               </label>
               <label class="field">
                 <span class="field-label mono">VAD BACKEND</span>
                 <select id="adv-vad">
-                  <option value="auto">auto — FireRed → Silero</option>
+                  <option value="auto">auto - FireRed → Silero</option>
                   <option value="firered">firered only</option>
                   <option value="silero">silero only</option>
                 </select>
@@ -216,12 +224,12 @@
               <label class="switch">
                 <input type="checkbox" id="adv-dryrun" />
                 <span class="switch-track"></span>
-                <span class="switch-text">Dry run <span class="dim">— first 60 s only</span></span>
+                <span class="switch-text">Dry run <span class="dim">- first 60 s only</span></span>
               </label>
               <label class="switch">
                 <input type="checkbox" id="adv-wordalign" />
                 <span class="switch-track"></span>
-                <span class="switch-text">Word alignment <span class="dim">— NeMo NFA tier</span></span>
+                <span class="switch-text">Word alignment <span class="dim">- NeMo NFA tier</span></span>
               </label>
               <label class="switch">
                 <input type="checkbox" id="adv-septier" />
@@ -231,7 +239,7 @@
               <label class="switch">
                 <input type="checkbox" id="adv-skipsep" />
                 <span class="switch-track"></span>
-                <span class="switch-text">Skip separation <span class="dim">— use original audio</span></span>
+                <span class="switch-text">Skip separation <span class="dim">- use original audio</span></span>
               </label>
               <label class="switch">
                 <input type="checkbox" id="adv-debug" />
@@ -264,7 +272,7 @@
               <label class="field">
                 <span class="field-label mono">MANIFEST FORMAT</span>
                 <select id="adv-dsformat">
-                  <option value="ljspeech">ljspeech — metadata.csv</option>
+                  <option value="ljspeech">ljspeech - metadata.csv</option>
                   <option value="ljspeech+jsonl">ljspeech + jsonl</option>
                 </select>
               </label>
@@ -275,7 +283,7 @@
               <label class="switch">
                 <input type="checkbox" id="adv-dnsmos" />
                 <span class="switch-track"></span>
-                <span class="switch-text">DNSMOS filter <span class="dim">— quality gate</span></span>
+                <span class="switch-text">DNSMOS filter <span class="dim">- quality gate</span></span>
               </label>
 
               <span class="adv-group mono">VOICE SAMPLES</span>
@@ -303,13 +311,14 @@
 
         <div id="vad-banner" hidden>
           <span class="vb-led" aria-hidden="true"></span>
-          <span class="vb-text mono">FIREREDVAD MODEL MISSING — preflight will abort the run without it</span>
+          <span class="vb-text mono">FIREREDVAD MODEL MISSING - preflight will abort the run without it</span>
           <button class="btn-small" id="vad-dl">DOWNLOAD NOW</button>
         </div>
 
         <div id="run-gate" role="status" hidden>
           <span class="vb-led" aria-hidden="true"></span>
           <span class="vb-text mono" id="run-gate-text"></span>
+          <button class="btn-small" id="run-gate-setup">OPEN SETUP →</button>
         </div>
 
         <div id="transport" class="reveal" style="--d:3">
@@ -337,7 +346,7 @@
         <ol id="stages"></ol>
 
         <div id="result-card" hidden>
-          <div class="result-num mono" id="result-clips">—</div>
+          <div class="result-num mono" id="result-clips">-</div>
           <div class="result-cap">verified clips in the dataset</div>
           <div class="result-actions">
             <button class="btn-small" id="review-btn">◈ REVIEW RESULTS</button>
@@ -365,7 +374,7 @@
       <header id="results-head">
         <div class="res-id">
           <div class="res-eyebrow mono">◈ RESULTS</div>
-          <h2 id="res-title">—</h2>
+          <h2 id="res-title">-</h2>
         </div>
         <span class="res-meta mono" id="res-meta"></span>
         <span class="res-spacer"></span>

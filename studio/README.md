@@ -22,19 +22,33 @@ are missing, use **OUTPUT → SETUP**:
 
 1. Pick an install folder, for example `C:\Users\<you>\AppData\Local\TimbreStudio\runtime`
    or a larger drive such as `E:\TimbreStudioRuntime`.
-2. Press **INSTALL / REPAIR**. The setup command streams progress into the
-   transmission log and is safe to rerun.
-3. Studio installs/repairs these managed pieces under that folder:
+2. The setup checklist shows the status of each managed piece. You can install
+   missing items in two ways:
+   - **Per piece:** each missing row has its own **INSTALL** button. It installs
+     that item and any prerequisites it still needs, in order. For example,
+     installing the VAD model first installs the repo, Python, and
+     `yt-dlp`/`huggingface-hub` if they are missing. If a row cannot run yet, it
+     shows **BLOCKED: needs ...** until its prerequisites are installed.
+   - **All at once:** **INSTALL MISSING** installs every missing piece in
+     dependency order. Once everything is present, the button changes to
+     **REPAIR**.
+
+   Only one install runs at a time. Progress appears in the transmission log,
+   and every install is safe to rerun.
+3. The managed pieces installed under that folder are:
    - `Timbre/` source tree from the latest GitHub release, falling back to `main`
      when no release exists.
    - `.venv/` Python 3.12 environment using `uv`.
-   - `ffmpeg/bin/ffmpeg.exe` and `ffprobe.exe`.
+   - `ffmpeg/bin/ffmpeg.exe` and `ffprobe.exe` (one install covers both).
    - Python requirements from `requirements.txt`, plus `yt-dlp` and
      `huggingface-hub`.
    - `pretrained_models/FireRedVAD`.
 4. When the checklist is green, **USE** adopts the managed repo, Python, and
    output paths. The normal run button then uses those paths and prepends the
    managed ffmpeg/venv tools to spawned commands without changing system PATH.
+
+> Managed install is Windows-only. On macOS/Linux the checklist still shows what is
+> present, but the dependencies must be installed by hand (see Developer prerequisites).
 
 This still downloads a large ML stack. CUDA/GPU, PyTorch, NeMo, GitHub/PyPI,
 and Hugging Face failures are surfaced in the log; Setup does not fake a green
@@ -68,7 +82,8 @@ npm run tauri build
 | `detect_env`          | Finds the repo root (walks up to `run_timbre.py`), python, yt-dlp, ffmpeg |
 | `default_setup_dir`   | Returns the per-user managed-runtime folder default                       |
 | `setup_status`        | Checks managed repo, venv modules, ffmpeg/ffprobe, yt-dlp, and VAD        |
-| `start_setup`         | Streams the Windows managed install/repair flow                           |
+| `start_setup`         | Streams the Windows managed install/repair flow (all pieces)              |
+| `install_target`      | Installs one piece + its not-yet-ready prerequisites (per-row INSTALL)     |
 | `start_pipeline`      | Spawns `python run_timbre.py <args>` with unbuffered/plain output         |
 | `start_ytdlp`         | Pulls best-audio → wav into `<repo>/downloads/` (Colab notebook recipe)   |
 | `generate_refs`       | Runs `extract_reference.py` to silence-split candidate voice samples      |
@@ -88,6 +103,15 @@ folders are wiped, incomplete repos are backed up, and existing good pieces are
 reused. Runtime updates and app updates are separate: app updates replace the
 Tauri desktop shell; **SETUP / REPAIR** refreshes or repairs the managed Python
 runtime and Timbre source tree.
+
+For maintainers: the install pieces are modeled by the `SetupTarget` enum in
+`src-tauri/src/lib.rs`. `build_setup_script(root, &targets)` emits the always-run
+prelude plus only the gated blocks for the requested targets (`start_setup` passes
+all seven; `install_target` passes one piece's prerequisite closure via
+`prereqs_for`, pruning already-installed prerequisites with `target_ready`). The
+frontend mirrors the prerequisite graph and per-row button state in the pure
+`src/lib/setup-plan.ts` module (`prereqsFor` / `nextInstallable` / `rowState`),
+which is unit-tested headlessly in `src/lib/setup-plan.test.ts`.
 
 ## App updates and release CI
 

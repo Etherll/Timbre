@@ -45,7 +45,7 @@ const LAUNCH_READY: Settings = {
   outputDir: "E:/Timbre/output_runs",
 };
 
-describe("loadSettingsFrom — parse-tolerant defaults-merge (#9 AC3, covers #5)", () => {
+describe("loadSettingsFrom - parse-tolerant defaults-merge (#9 AC3, covers #5)", () => {
   it("returns a fresh copy of DEFAULTS for a null payload (first run)", () => {
     const s = loadSettingsFrom(null);
     expect(s).toEqual(DEFAULTS);
@@ -100,7 +100,7 @@ describe("loadSettingsFrom — parse-tolerant defaults-merge (#9 AC3, covers #5)
   });
 });
 
-describe("run presets — launch-ready pure settings (#9 GUI launch readiness)", () => {
+describe("run presets - launch-ready pure settings (#9 GUI launch readiness)", () => {
   it("exposes the stable preset ids expected by the GUI picker", () => {
     expect(Object.keys(RUN_PRESETS)).toEqual(["balanced", "quick-check", "word-safe", "low-vram"]);
   });
@@ -160,7 +160,7 @@ describe("run presets — launch-ready pure settings (#9 GUI launch readiness)",
   });
 });
 
-describe("settings import/export/reset — portable GUI settings (#9 GUI launch readiness)", () => {
+describe("settings import/export/reset - portable GUI settings (#9 GUI launch readiness)", () => {
   it("exports known Settings keys only, in DEFAULTS order", () => {
     const withUnknown = {
       ...LAUNCH_READY,
@@ -230,7 +230,7 @@ describe("settings import/export/reset — portable GUI settings (#9 GUI launch 
   });
 });
 
-describe("buildArgsFrom — DEFAULTS golden (#9 AC2)", () => {
+describe("buildArgsFrom - DEFAULTS golden (#9 AC2)", () => {
   it("emits EXACTLY the required argv and nothing optional for DEFAULTS", () => {
     const s: Settings = { ...DEFAULTS, outputDir: "/out" };
     const args = buildArgsFrom(s, SRC, NAME, REFS);
@@ -317,7 +317,7 @@ describe("buildArgsFrom — DEFAULTS golden (#9 AC2)", () => {
   });
 });
 
-describe("R17 name-drift guard — every emittable flag exists in the golden help (#9 AC2)", () => {
+describe("R17 name-drift guard - every emittable flag exists in the golden help (#9 AC2)", () => {
   it("each '--*' flag buildArgsFrom can emit is a substring of tests/golden/cli_help.txt", () => {
     // Drive buildArgsFrom with the all-non-default settings to surface every
     // flag string it is capable of emitting, then assert membership. This is

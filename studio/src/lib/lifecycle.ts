@@ -34,7 +34,7 @@ export async function registerCloseGuard(hooks: CloseGuardHooks): Promise<void> 
     const plural = live.length === 1 ? "task is" : "tasks are";
     const confirmed = await ask(
       `${live.length} ${plural} still running. Quitting will cancel the run and stop every worker.\n\nQuit anyway?`,
-      { title: "Timbre Studio — run in progress", kind: "warning" },
+      { title: "Timbre Studio - run in progress", kind: "warning" },
     );
     if (!confirmed) return; // user backed out; window stays open
 

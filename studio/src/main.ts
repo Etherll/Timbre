@@ -26,6 +26,13 @@ import {
   resetSettings as resetSettingsPure,
 } from "./lib/settings";
 import { registerCloseGuard } from "./lib/lifecycle";
+import {
+  type SetupTargetKey,
+  type SetupReadiness,
+  SETUP_TARGETS,
+  prereqsFor,
+  rowState,
+} from "./lib/setup-plan";
 
 // types
 
@@ -126,6 +133,10 @@ let vadDownloading = false;
 let setup: SetupStatus | null = null;
 let setupTaskId: number | null = null;
 let setupRunning = false;
+// Per-row install: the target currently installing (lock - one at a time) and
+// the set of targets whose last install attempt failed (cleared on retry).
+let activeInstall: SetupTargetKey | null = null;
+const failedInstalls = new Set<SetupTargetKey>();
 let updateChecking = false;
 let activePreset: RunPresetId | null = "balanced";
 let repaintSettingsControls: (() => void) | null = null;
@@ -218,9 +229,9 @@ function friendlyError(action: string, raw: string): string {
     return `Couldn't start ${exe} for ${action}. Check it's installed and on PATH (set the interpreter under Advanced if needed).`;
   }
   if (/not found|no such file|cannot find/i.test(raw)) {
-    return `${action} failed — a required file or tool was not found. See the transmission log for details.`;
+    return `${action} failed - a required file or tool was not found. See the transmission log for details.`;
   }
-  return `${action} failed — see the transmission log for details.`;
+  return `${action} failed - see the transmission log for details.`;
 }
 
 function reportError(action: string, e: unknown) {
@@ -453,12 +464,17 @@ function renderEnvStrip() {
     const c = document.createElement("span");
     c.className = `env-chip ${ok ? "" : "bad"}`;
     c.textContent = label;
-    c.title = title;
+    // A missing piece is a click-to-fix shortcut straight into Setup.
+    c.title = ok ? title : `${title} - click to open Setup`;
+    if (!ok) {
+      c.setAttribute("role", "button");
+      c.addEventListener("click", () => openSetup());
+    }
     strip.appendChild(c);
   };
   const py = settings.python || env.python || "";
   chip(!!py, py ? (env.pythonVersion ?? "PYTHON") : "NO PYTHON",
-    py ? `pipeline interpreter: ${py}` : "no python found — set one under Advanced");
+    py ? `pipeline interpreter: ${py}` : "no python found - set one under Advanced");
   const managedYtdlp = setup?.ytdlpReady ?? false;
   const ytdlpTitle = env.ytdlpVersion
     ? env.ytdlpVia === "module"
@@ -473,25 +489,27 @@ function renderEnvStrip() {
   const ffmpegOk = env.ffmpeg || (setup?.ffmpegReady ?? false);
   const ffprobeOk = env.ffprobe || (setup?.ffprobeReady ?? false);
   chip(ffmpegOk, ffmpegOk ? "FFMPEG" : "NO FFMPEG",
-    env.ffmpeg ? "ffmpeg on PATH" : setup?.ffmpegReady ? `managed ffmpeg: ${setup.ffmpegBin}` : "ffmpeg not found — required to decode/segment audio");
+    env.ffmpeg ? "ffmpeg on PATH" : setup?.ffmpegReady ? `managed ffmpeg: ${setup.ffmpegBin}` : "ffmpeg not found - required to decode/segment audio");
   chip(ffprobeOk, ffprobeOk ? "FFPROBE" : "NO FFPROBE",
-    env.ffprobe ? "ffprobe on PATH — duration badges enabled" : setup?.ffprobeReady ? `managed ffprobe: ${setup.ffprobePath}` : "ffprobe not found — file duration badges disabled");
+    env.ffprobe ? "ffprobe on PATH - duration badges enabled" : setup?.ffprobeReady ? `managed ffprobe: ${setup.ffprobePath}` : "ffprobe not found - file duration badges disabled");
   if (vadModelOk !== null) {
     chip(vadModelOk, vadModelOk ? "VAD" : "NO VAD MODEL",
-      vadModelOk ? "FireRedVAD model present" : "FireRedVAD model missing — preflight aborts without it");
+      vadModelOk ? "FireRedVAD model present" : "FireRedVAD model missing - preflight aborts without it");
   }
 }
 
 // first-run setup
 
-const SETUP_ITEMS: Array<[keyof SetupStatus, string]> = [
-  ["repoReady", "REPO"],
-  ["pythonReady", "PYTHON"],
-  ["requirementsReady", "PACKAGES"],
-  ["ytdlpReady", "YT-DLP"],
-  ["ffmpegReady", "FFMPEG"],
-  ["ffprobeReady", "FFPROBE"],
-  ["vadReady", "VAD"],
+// Each managed piece, with a plain-English description so a first-time user
+// understands WHAT it is and WHY they need it - not just an opaque token.
+const SETUP_ITEMS: Array<{ key: keyof SetupStatus; label: string; desc: string }> = [
+  { key: "repoReady", label: "REPO", desc: "Timbre pipeline source code" },
+  { key: "pythonReady", label: "PYTHON", desc: "isolated Python 3.12 venv (in this folder)" },
+  { key: "requirementsReady", label: "PACKAGES", desc: "PyTorch · NeMo · the ML stack" },
+  { key: "ytdlpReady", label: "YT-DLP", desc: "pull audio from YouTube links" },
+  { key: "ffmpegReady", label: "FFMPEG", desc: "decode & segment your audio" },
+  { key: "ffprobeReady", label: "FFPROBE", desc: "media duration badges (comes with ffmpeg)" },
+  { key: "vadReady", label: "VAD", desc: "FireRedVAD speech detector" },
 ];
 
 async function ensureSetupDir(): Promise<string> {
@@ -526,25 +544,147 @@ function paintSetup() {
 
   const list = $("setup-list");
   list.innerHTML = "";
-  if (!setup) {
-    const li = document.createElement("li");
-    li.innerHTML = "<span>CHOOSE PATH</span>";
-    list.appendChild(li);
-  } else {
-    for (const [key, label] of SETUP_ITEMS) {
+  const readiness = setup ? (setup as unknown as SetupReadiness) : null;
+  if (setup && readiness) {
+    const targetByStatusKey = new Map(SETUP_TARGETS.map((t) => [t.statusKey, t]));
+    for (const { key, label, desc } of SETUP_ITEMS) {
       const li = document.createElement("li");
-      li.className = setup[key] ? "ok" : "";
-      li.title = `${label}: ${setup[key] ? "ready" : "missing"}`;
-      const span = document.createElement("span");
-      span.textContent = label;
-      li.appendChild(span);
+      li.className = "setup-row";
+
+      const target = targetByStatusKey.get(key as keyof SetupReadiness);
+      // ffprobe (and any non-target row) is status-only - covered by the ffmpeg
+      // installer. Only the six installable targets get an action button.
+      const state = target ? rowState(target.key, readiness, activeInstall, failedInstalls) : (setup[key] ? "ok" : "blocked");
+      li.dataset.state = state;
+
+      let chip: string;
+      if (state === "ok") chip = "READY";
+      else if (state === "installing") chip = "INSTALLING…";
+      else if (state === "failed") chip = "FAILED";
+      else if (state === "blocked") {
+        const need = target ? prereqsFor(target.key, readiness)[0] : undefined;
+        const needLabel = need ? (SETUP_TARGETS.find((t) => t.key === need)?.label ?? need) : "";
+        chip = needLabel ? `NEEDS ${needLabel}` : "WITH FFMPEG";
+      } else chip = "NOT INSTALLED";
+
+      li.innerHTML =
+        `<span class="sr-dot"></span>` +
+        `<span class="sr-name">${label}</span>` +
+        `<span class="sr-desc">${desc}</span>` +
+        `<span class="sr-chip">${chip}</span>`;
+      li.title = `${label}: ${state === "ok" ? "ready" : chip.toLowerCase()}`;
+
+      // Action button only for installable, actionable states.
+      if (target && (state === "install" || state === "failed")) {
+        const btn = document.createElement("button");
+        btn.className = state === "failed" ? "setup-install-btn is-retry" : "setup-install-btn";
+        btn.textContent = state === "failed" ? "RETRY" : "INSTALL";
+        btn.disabled = activeInstall !== null;
+        btn.addEventListener("click", () => void installTarget(target.key));
+        li.appendChild(btn);
+      }
       list.appendChild(li);
     }
   }
+
+  // Summary banner - the "what to do now" line.
+  const summary = $("setup-summary");
+  const summaryText = $("setup-summary-text");
   const run = $<HTMLButtonElement>("setup-run");
-  run.disabled = setupRunning;
-  run.textContent = setupRunning ? "INSTALLING…" : setup?.ready ? "REPAIR" : "INSTALL / REPAIR";
-  $<HTMLButtonElement>("setup-adopt").disabled = setupRunning || !setup || !setup.repoReady || !setup.pythonReady;
+  const runLabel = run.querySelector<HTMLElement>(".srb-label");
+  const missingCount = setup?.missing.length ?? 0;
+  run.disabled = setupRunning || activeInstall !== null || !setup;
+  if (!setup) {
+    summary.dataset.tone = "missing";
+    summaryText.textContent = "Choose an install folder above, then install what's missing.";
+    if (runLabel) runLabel.textContent = "INSTALL";
+  } else if (setupRunning || activeInstall !== null) {
+    summary.dataset.tone = "working";
+    summaryText.textContent = activeInstall
+      ? `Installing ${activeInstall}… progress is in the transmission log below.`
+      : "Installing the managed runtime… see the transmission log below.";
+    if (runLabel) runLabel.textContent = "INSTALLING…";
+  } else if (setup.ready) {
+    summary.dataset.tone = "ready";
+    summaryText.textContent = "Everything's installed. Press USE to run with this managed runtime.";
+    if (runLabel) runLabel.textContent = "RE-INSTALL ALL";
+  } else {
+    summary.dataset.tone = "missing";
+    summaryText.textContent =
+      `${missingCount} component${missingCount === 1 ? "" : "s"} still needed - install each below, or use INSTALL MISSING to get them all in the right order.`;
+    if (runLabel) runLabel.textContent = `INSTALL MISSING (${missingCount})`;
+  }
+
+  $<HTMLButtonElement>("setup-adopt").disabled =
+    setupRunning || activeInstall !== null || !setup || !setup.repoReady || !setup.pythonReady;
+}
+
+// Open + reveal the setup panel from anywhere (run-gate, a red env chip).
+// This is the single "what do I do now?" entry point for a fresh machine.
+function openSetup() {
+  const panel = $("setup-panel");
+  panel.hidden = false;
+  const btn = $("setup-toggle");
+  btn.textContent = "SETUP ▴";
+  btn.setAttribute("aria-expanded", "true");
+  void refreshSetupStatus();
+  panel.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// Install a single target (backend expands its prereq closure). Streams into the
+// shared terminal like start_setup; the activeInstall lock keeps only one install
+// touching the venv at a time (all Install buttons + master button disable while
+// it runs). On exit 0 we re-reconcile status from disk; non-zero marks the row
+// failed for a RETRY affordance.
+async function installTarget(target: SetupTargetKey) {
+  if (setupRunning || activeInstall !== null) return;
+  // Claim the lock synchronously BEFORE the first await so two fast clicks (or the
+  // first-run folder picker opened by ensureSetupDir) can't both pass the guard.
+  activeInstall = target;
+  failedInstalls.delete(target);
+  paintSetup();
+  let dir: string;
+  try {
+    dir = await ensureSetupDir();
+  } catch (e) {
+    activeInstall = null;
+    paintSetup();
+    reportError(`Installing ${target}`, e);
+    return;
+  }
+  openTerminal();
+  logLine("stdout", `TIMBRE_SETUP:: installing ${target} under ${dir}`);
+
+  const ch = new Channel<ProcEvent>();
+  ch.onmessage = (ev) => {
+    if (ev.event === "line") logLine(ev.stream, ev.line);
+    else if (ev.event === "exit") {
+      untrackTask(setupTaskId);
+      setupTaskId = null;
+      activeInstall = null;
+      if (ev.code === 0) {
+        toast(`${target} installed`, "info");
+        void refreshSetupStatus();
+      } else {
+        if (!ev.cancelled) {
+          failedInstalls.add(target);
+          toast(`${target} install failed - see transmission log`);
+          expandTerminal();
+        }
+        paintSetup();
+      }
+    }
+  };
+
+  try {
+    setupTaskId = await invoke<number>("install_target", { installDir: dir, target, channel: ch });
+    trackTask(setupTaskId);
+  } catch (e) {
+    activeInstall = null;
+    setupTaskId = null;
+    paintSetup();
+    reportError(`Installing ${target}`, e);
+  }
 }
 
 async function refreshSetupStatus() {
@@ -595,7 +735,7 @@ async function startSetup() {
           if (setup) adoptSetupPaths(setup);
         });
       } else if (!ev.cancelled) {
-        toast("setup failed — see transmission log");
+        toast("setup failed - see transmission log");
         expandTerminal();
       }
       paintSetup();
@@ -694,10 +834,10 @@ async function downloadVadModel() {
       btn.disabled = false;
       btn.textContent = "DOWNLOAD NOW";
       if (ev.code === 0) {
-        toast("FireRedVAD model installed — runs are preflight-clean now", "info");
+        toast("FireRedVAD model installed - runs are preflight-clean now", "info");
         void refreshVadCheck();
       } else if (!ev.cancelled) {
-        toast("VAD model download failed — see transmission log");
+        toast("VAD model download failed - see transmission log");
         expandTerminal();
       }
     }
@@ -792,7 +932,7 @@ function renderRefs() {
     } else {
       clean.textContent = "✦";
       clean.disabled = cleaningRef !== null;
-      clean.title = "clean voice — strip music/noise with the separator";
+      clean.title = "clean voice - strip music/noise with the separator";
       clean.addEventListener("click", () => void cleanReference(i));
     }
     const x = document.createElement("button");
@@ -821,7 +961,7 @@ async function cleanReference(i: number) {
   cleaningRef = i;
   renderRefs();
   openTerminal();
-  logLine("stdout", `▙ cleaning reference — ${basename(src)}`);
+  logLine("stdout", `▙ cleaning reference - ${basename(src)}`);
 
   let cleanedPath: string | null = null;
   let verdict = "";
@@ -846,17 +986,17 @@ async function cleanReference(i: number) {
           refPaths[i] = cleanedPath;
           cleanedRefs.add(cleanedPath);
           const how = bleed === null ? ""
-            : bleed < 0 ? ` — background was ${Math.abs(bleed).toFixed(0)} dB under the voice`
-            : " — background was as loud as the voice";
+            : bleed < 0 ? ` - background was ${Math.abs(bleed).toFixed(0)} dB under the voice`
+            : " - background was as loud as the voice";
           toast(`voice isolated${how}`, "info");
         } else if (verdict === "already_clean") {
           cleanedRefs.add(src); // verified clean: same badge, nothing re-encoded
-          toast("already clean — kept the original", "info");
+          toast("already clean - kept the original", "info");
         } else {
-          toast("kept the original — separation found no reliable voice", "info");
+          toast("kept the original - separation found no reliable voice", "info");
         }
       } else if (!ev.cancelled) {
-        toast("cleaning failed — see transmission log");
+        toast("cleaning failed - see transmission log");
         expandTerminal();
       }
       renderRefs();
@@ -931,7 +1071,7 @@ function updateGenButton() {
   btn.disabled = busy || !sourcePath || !settings.repo || !settings.python || !ffmpegOk;
   btn.textContent = scanning ? "◌ SCANNING…" : "◌ FIND VOICE SAMPLES";
   btn.title = !sourcePath ? "load a source first"
-    : !ffmpegOk ? "ffmpeg not found — run Setup or set it on PATH"
+    : !ffmpegOk ? "ffmpeg not found - run Setup or set it on PATH"
     : "silence-split the source into reference candidates";
 }
 
@@ -1048,12 +1188,12 @@ async function loadCandidates() {
   $("cands-rescan").hidden = false;
   pageStart = 0;
   if (!cands.length) {
-    $("cands-title").textContent = "NO CLEAN SPEECH FOUND — TRY ANOTHER SOURCE OR DROP A CLIP";
+    $("cands-title").textContent = "NO CLEAN SPEECH FOUND - TRY ANOTHER SOURCE OR DROP A CLIP";
     return;
   }
   const how = vadMode === "vad" ? "VOICE-VERIFIED" : vadMode === "fallback" ? "LOUDNESS-BASED" : "";
   $("cands-title").textContent =
-    `${cands.length} SAMPLES${how ? ` · ${how}` : ""} — LISTEN, THEN PICK YOUR SPEAKER`;
+    `${cands.length} SAMPLES${how ? ` · ${how}` : ""} - LISTEN, THEN PICK YOUR SPEAKER`;
   renderCandPage();
 }
 
@@ -1076,7 +1216,7 @@ async function generateRefs() {
       if (ev.line.includes("MODE::vad")) vadMode = "vad";
       else if (ev.line.includes("MODE::fallback")) {
         vadMode = "fallback";
-        $("cands-title").textContent = "NO VAD AVAILABLE — SPLITTING ON SILENCE…";
+        $("cands-title").textContent = "NO VAD AVAILABLE - SPLITTING ON SILENCE…";
       }
       if (ev.line.includes("[2/4]")) $("cands-title").textContent = "LISTENING FOR VOICE (VAD)…";
       if (ev.line.includes("[3/4]") || ev.line.includes("[2/3]"))
@@ -1089,7 +1229,7 @@ async function generateRefs() {
       if (ev.code === 0) void loadCandidates();
       else if (!ev.cancelled) {
         panel.classList.add("ready");
-        $("cands-title").textContent = "SCAN FAILED — SEE TRANSMISSION LOG";
+        $("cands-title").textContent = "SCAN FAILED - SEE TRANSMISSION LOG";
         openTerminal();
       } else closeCands();
     }
@@ -1140,7 +1280,7 @@ async function browseOutDir() {
 
 function paintOutDir() {
   const v = $("outdir-val");
-  v.textContent = settings.outputDir || "—";
+  v.textContent = settings.outputDir || "-";
   v.title = settings.outputDir;
   renderRequiredStatuses();
 }
@@ -1226,7 +1366,7 @@ async function fetchYoutube() {
         setPhase("idle");
         setReadout("Awaiting signal.", "drop a recording to begin");
         if (!ev.cancelled) {
-          toast("YouTube pull failed — see transmission log");
+          toast("YouTube pull failed - see transmission log");
           openTerminal();
         }
       }
@@ -1264,7 +1404,7 @@ function updateFetchButton() {
   const reason = env && !env.ytdlpVersion
     ? setup?.ytdlpReady
       ? ""
-      : "yt-dlp not found — run Setup or install it (pip install yt-dlp) to pull from YouTube"
+      : "yt-dlp not found - run Setup or install it (pip install yt-dlp) to pull from YouTube"
     : !settings.repo
     ? "set the Timbre repo under Advanced before pulling from YouTube"
     : "";
@@ -1278,9 +1418,9 @@ function updateFetchButton() {
 // from the soft "still needed: source/name/ref" prompts. Returns an actionable
 // reason string, or "" when no dependency is blocking. Drives the run-gate chip.
 function depBlock(): string {
-  if (!settings.python) return "NO PYTHON FOUND — run Setup or set Python 3.10+ under Advanced";
-  if (env && !env.ffmpeg && !setup?.ffmpegReady) return "FFMPEG NOT FOUND — run Setup or install ffmpeg to decode and segment audio";
-  if (!settings.repo) return "TIMBRE REPO NOT SET — point Advanced → repo at run_timbre.py";
+  if (!settings.python) return "NO PYTHON FOUND - run Setup or set Python 3.10+ under Advanced";
+  if (env && !env.ffmpeg && !setup?.ffmpegReady) return "FFMPEG NOT FOUND - run Setup or install ffmpeg to decode and segment audio";
+  if (!settings.repo) return "TIMBRE REPO NOT SET - point Advanced → repo at run_timbre.py";
   return "";
 }
 
@@ -1299,6 +1439,8 @@ function renderRunGate() {
   const reason = phase === "running" || phase === "fetching" ? "" : depBlock();
   gate.hidden = !reason;
   if (reason) $("run-gate-text").textContent = reason;
+  // The fix for every dep block lives in Setup - always offer the shortcut.
+  $("run-gate-setup").hidden = !reason;
 }
 
 function setRequiredStatus(id: string, ok: boolean, ready: string, missing: string) {
@@ -1347,7 +1489,7 @@ async function startRun() {
   $("cancel-btn").hidden = false;
   setReadout("Warming the machines.", "STAGE 00 · 00:00");
   openTerminal();
-  logLine("stdout", `▙ timbre studio — ${new Date().toLocaleTimeString()} — launching pipeline`);
+  logLine("stdout", `▙ timbre studio - ${new Date().toLocaleTimeString()} - launching pipeline`);
 
   const ch = new Channel<ProcEvent>();
   ch.onmessage = (ev) => {
@@ -1368,7 +1510,7 @@ async function startRun() {
       } else {
         setPhase("error");
         if (activeStage >= 0) stageRows[activeStage].className = "stage failed";
-        setReadout("Signal lost.", `exit code ${ev.code ?? "?"} — see transmission log`);
+        setReadout("Signal lost.", `exit code ${ev.code ?? "?"} - see transmission log`);
         expandTerminal();
       }
     }
@@ -1384,7 +1526,7 @@ async function startRun() {
     trackTask(runTaskId);
   } catch (e) {
     setPhase("error");
-    setReadout("Signal lost.", "couldn't launch the pipeline — see transmission log");
+    setReadout("Signal lost.", "couldn't launch the pipeline - see transmission log");
     reportError("Pipeline launch", e);
     expandTerminal();
     $("cancel-btn").hidden = true;
@@ -1407,7 +1549,7 @@ async function finishRun() {
       return;
     }
   } catch { /* fall through to the generic finish */ }
-  setReadout("Run complete.", `${elapsed} — output: ${settings.outputDir}`);
+  setReadout("Run complete.", `${elapsed} - output: ${settings.outputDir}`);
   $("open-outdir").onclick = () => invoke("open_path", { path: settings.outputDir }).catch((e) => reportError("Opening folder", e));
 }
 
@@ -1711,7 +1853,7 @@ async function loadRunOverview(runDir?: string) {
     num.textContent = "▙";
     const text = document.createElement("p");
     text.className = "clip-text";
-    text.textContent = "The full reel — every verified second, spliced into one take.";
+    text.textContent = "The full reel - every verified second, spliced into one take.";
     const sub = document.createElement("span");
     sub.className = "clip-sub mono";
     sub.textContent = basename(overview.solo);
@@ -1724,7 +1866,7 @@ async function loadRunOverview(runDir?: string) {
   } else {
     const empty = document.createElement("li");
     empty.className = "vis-empty";
-    empty.textContent = "NO DATASET CLIPS IN THIS RUN — QUALITY GATE OR EXPORT SETTINGS";
+    empty.textContent = "NO DATASET CLIPS IN THIS RUN - QUALITY GATE OR EXPORT SETTINGS";
     $("res-list").appendChild(empty);
     $("res-meta").textContent = `0 CLIPS · ${basename(overview.runDir)}`;
     $("res-strip-fill").style.width = "0%";
@@ -2094,6 +2236,7 @@ async function boot() {
     btn.setAttribute("aria-expanded", String(open));
     if (open) void refreshSetupStatus();
   });
+  $("run-gate-setup").addEventListener("click", () => openSetup());
   $("setup-change").addEventListener("click", () => void browseSetupDir());
   $("setup-refresh").addEventListener("click", () => void refreshSetupStatus());
   $("setup-run").addEventListener("click", () => void startSetup());

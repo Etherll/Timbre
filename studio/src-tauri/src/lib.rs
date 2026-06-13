@@ -477,22 +477,130 @@ fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-#[tauri::command]
-fn start_setup(
-    registry: State<'_, ProcRegistry>,
-    install_dir: String,
-    channel: Channel<ProcEvent>,
-) -> Result<u32, String> {
-    if !cfg!(windows) {
-        return Err("managed setup currently supports Windows builds only".into());
+/// The seven managed-setup install units, in canonical install order. The
+/// string keys are a frozen contract shared with the frontend
+/// (`install_target(target)`); see `.claude/execute-team/ownership.md`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SetupTarget {
+    Uv,
+    Repo,
+    Ffmpeg,
+    Python,
+    Requirements,
+    Ytdlp,
+    Vad,
+}
+
+/// Canonical install order — used to sort prereq closures so the generated
+/// script's `$targets` array always lists blocks in their emission order.
+const ALL_TARGETS: [SetupTarget; 7] = [
+    SetupTarget::Uv,
+    SetupTarget::Repo,
+    SetupTarget::Ffmpeg,
+    SetupTarget::Python,
+    SetupTarget::Requirements,
+    SetupTarget::Ytdlp,
+    SetupTarget::Vad,
+];
+
+impl SetupTarget {
+    fn parse(key: &str) -> Option<SetupTarget> {
+        match key {
+            "uv" => Some(SetupTarget::Uv),
+            "repo" => Some(SetupTarget::Repo),
+            "ffmpeg" => Some(SetupTarget::Ffmpeg),
+            "python" => Some(SetupTarget::Python),
+            "requirements" => Some(SetupTarget::Requirements),
+            "ytdlp" => Some(SetupTarget::Ytdlp),
+            "vad" => Some(SetupTarget::Vad),
+            _ => None,
+        }
     }
-    let root = setup_root(&install_dir);
+
+    fn key(self) -> &'static str {
+        match self {
+            SetupTarget::Uv => "uv",
+            SetupTarget::Repo => "repo",
+            SetupTarget::Ffmpeg => "ffmpeg",
+            SetupTarget::Python => "python",
+            SetupTarget::Requirements => "requirements",
+            SetupTarget::Ytdlp => "ytdlp",
+            SetupTarget::Vad => "vad",
+        }
+    }
+
+    #[allow(dead_code)]
+    fn label(self) -> &'static str {
+        match self {
+            SetupTarget::Uv => "uv bootstrapper",
+            SetupTarget::Repo => "Timbre source",
+            SetupTarget::Ffmpeg => "ffmpeg and ffprobe",
+            SetupTarget::Python => "managed Python environment",
+            SetupTarget::Requirements => "Timbre requirements",
+            SetupTarget::Ytdlp => "yt-dlp and model-download helpers",
+            SetupTarget::Vad => "FireRedVAD model",
+        }
+    }
+
+    /// Direct prerequisites (not transitive). See `prereqs_for` for the closure.
+    fn direct_prereqs(self) -> &'static [SetupTarget] {
+        match self {
+            SetupTarget::Uv => &[],
+            SetupTarget::Repo => &[],
+            SetupTarget::Ffmpeg => &[],
+            SetupTarget::Python => &[SetupTarget::Uv],
+            SetupTarget::Requirements => {
+                &[SetupTarget::Uv, SetupTarget::Repo, SetupTarget::Python]
+            }
+            SetupTarget::Ytdlp => &[SetupTarget::Uv, SetupTarget::Python],
+            SetupTarget::Vad => &[
+                SetupTarget::Uv,
+                SetupTarget::Repo,
+                SetupTarget::Python,
+                SetupTarget::Ytdlp,
+            ],
+        }
+    }
+}
+
+/// Pure: transitive prerequisite closure of `target` plus `target` itself,
+/// returned in canonical install order (`ALL_TARGETS`). No I/O.
+fn prereqs_for(target: SetupTarget) -> Vec<SetupTarget> {
+    let mut needed: Vec<SetupTarget> = Vec::new();
+    fn visit(t: SetupTarget, needed: &mut Vec<SetupTarget>) {
+        for &p in t.direct_prereqs() {
+            visit(p, needed);
+        }
+        if !needed.contains(&t) {
+            needed.push(t);
+        }
+    }
+    visit(target, &mut needed);
+    ALL_TARGETS
+        .iter()
+        .copied()
+        .filter(|t| needed.contains(t))
+        .collect()
+}
+
+/// Build the managed-setup PowerShell script. The prelude (paths, TLS, helpers,
+/// directory creation) always runs; each of the six install blocks is gated by
+/// `if ($targets -contains '<key>')`. When `targets` is all seven, the emitted
+/// script is byte-equivalent to the legacy single-shot script except for the
+/// prepended `$targets = @(...)` line and the per-block `if` wrappers.
+fn build_setup_script(root: &Path, targets: &[SetupTarget]) -> String {
     let root_arg = ps_quote(&root.to_string_lossy());
-    let script = format!(r#"
+    let targets_arr = targets
+        .iter()
+        .map(|t| format!("'{}'", t.key()))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(r#"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+$targets = @({targets_arr})
 $root = {root_arg}
 $repo = Join-Path $root 'Timbre'
 $venv = Join-Path $root '.venv'
@@ -511,6 +619,7 @@ function Download-File($url, $outFile) {{
 New-Item -ItemType Directory -Force $root | Out-Null
 New-Item -ItemType Directory -Force $setupState | Out-Null
 
+if ($targets -contains 'uv') {{
 if (!(Test-Path $uv)) {{
   Say 'installing uv bootstrapper'
   $uvAsset = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {{ 'uv-aarch64-pc-windows-msvc.zip' }} else {{ 'uv-x86_64-pc-windows-msvc.zip' }}
@@ -524,7 +633,9 @@ if (!(Test-Path $uv)) {{
   New-Item -ItemType Directory -Force (Split-Path $uv) | Out-Null
   Copy-Item $foundUv.FullName $uv -Force
 }}
+}}
 
+if ($targets -contains 'repo') {{
 if (!(Test-Path (Join-Path $repo 'run_timbre.py'))) {{
   Say 'installing Timbre source'
   $repoZip = Join-Path $root 'timbre-source.zip'
@@ -549,7 +660,9 @@ if (!(Test-Path (Join-Path $repo 'run_timbre.py'))) {{
   }}
   Move-Item (Split-Path $runFile.FullName -Parent) $repo -Force
 }}
+}}
 
+if ($targets -contains 'ffmpeg') {{
 if (!(Test-Path $ffmpegExe) -or !(Test-Path $ffprobeExe)) {{
   Say 'installing ffmpeg and ffprobe'
   $ffZip = Join-Path $root 'ffmpeg.zip'
@@ -564,25 +677,36 @@ if (!(Test-Path $ffmpegExe) -or !(Test-Path $ffprobeExe)) {{
   New-Item -ItemType Directory -Force (Split-Path $ffmpegExe) | Out-Null
   Copy-Item (Join-Path $ffBin '*') (Split-Path $ffmpegExe) -Recurse -Force
 }}
+}}
 
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $root 'python'
 $env:UV_CACHE_DIR = Join-Path $root 'uv-cache'
 $env:Path = "$(Split-Path $ffmpegExe);$(Join-Path $venv 'Scripts');$env:Path"
 
+$py = Join-Path $venv 'Scripts\python.exe'
+
+if ($targets -contains 'python') {{
 Say 'creating managed Python 3.12 environment'
 & $uv python install 3.12
 & $uv venv $venv --python 3.12
-$py = Join-Path $venv 'Scripts\python.exe'
 if (!(Test-Path $py)) {{ throw "managed Python was not created at $py" }}
 
 Say 'installing Python packaging tools'
 & $uv pip install --python $py --upgrade pip setuptools wheel
+}}
+
+if ($targets -contains 'requirements') {{
 Say 'installing Timbre requirements; this can take a long time on first run'
 & $uv pip install --python $py -r (Join-Path $repo 'requirements.txt')
+Set-Content -Path $requirementsMarker -Value (Get-Date -Format o)
+}}
+
+if ($targets -contains 'ytdlp') {{
 Say 'installing YouTube and model-download helpers'
 & $uv pip install --python $py yt-dlp huggingface-hub
-Set-Content -Path $requirementsMarker -Value (Get-Date -Format o)
+}}
 
+if ($targets -contains 'vad') {{
 $vadDir = Join-Path $repo 'pretrained_models\FireRedVAD'
 if (!(Test-Path (Join-Path $vadDir 'VAD'))) {{
   Say 'downloading FireRedVAD model'
@@ -590,16 +714,138 @@ if (!(Test-Path (Join-Path $vadDir 'VAD'))) {{
   $env:HF_HUB_DISABLE_PROGRESS_BARS = '1'
   & $py -c $code
 }}
+}}
 
 Say 'managed runtime is ready'
 Write-Output "TIMBRE_SETUP_DONE::$root"
-"#);
+"#)
+}
+
+#[tauri::command]
+fn start_setup(
+    registry: State<'_, ProcRegistry>,
+    install_dir: String,
+    channel: Channel<ProcEvent>,
+) -> Result<u32, String> {
+    if !cfg!(windows) {
+        return Err("managed setup currently supports Windows builds only".into());
+    }
+    let root = setup_root(&install_dir);
+    let script = build_setup_script(&root, &ALL_TARGETS);
 
     let mut cmd = Command::new("powershell.exe");
     cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]);
     let id = registry.next_id();
     spawn_streamed(registry.tasks.clone(), id, cmd, channel)?;
     Ok(id)
+}
+
+/// True when the install unit named by `target` is already present on disk —
+/// reuses the same detectors `setup_status` reports, so `install_target` can
+/// skip prereqs that are already satisfied. `Uv` has no status field; we probe
+/// `uv.exe` directly (same path the script installs to).
+fn target_ready(target: SetupTarget, root: &Path) -> bool {
+    let repo = root.join("Timbre");
+    let python = setup_python(root);
+    match target {
+        SetupTarget::Uv => root.join("uv").join("uv.exe").is_file(),
+        SetupTarget::Repo => repo.join("run_timbre.py").is_file(),
+        SetupTarget::Ffmpeg => {
+            let ffmpeg_bin = root.join("ffmpeg").join("bin");
+            let ffmpeg = ffmpeg_bin.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+            let ffprobe = ffmpeg_bin.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+            (ffmpeg.is_file() || capture("ffmpeg", &["-version"]).is_some())
+                && (ffprobe.is_file() || capture("ffprobe", &["-version"]).is_some())
+        }
+        SetupTarget::Python => {
+            python.is_file()
+                && capture(python.to_string_lossy().as_ref(), &["--version"]).is_some()
+        }
+        SetupTarget::Requirements => setup_imports_ready(root, &repo, &python),
+        SetupTarget::Ytdlp => setup_ytdlp_ready(&python),
+        SetupTarget::Vad => repo.join("run_timbre.py").is_file() && vad_model_ready(&repo),
+    }
+}
+
+/// Install a single setup unit and any of its prerequisites that aren't already
+/// present. Expands `target`'s prereq closure (`prereqs_for`), drops the ones
+/// `target_ready` reports satisfied, and runs the parameterized script once with
+/// the remaining set. Windows-only, like `start_setup`.
+#[tauri::command]
+fn install_target(
+    registry: State<'_, ProcRegistry>,
+    install_dir: String,
+    target: String,
+    channel: Channel<ProcEvent>,
+) -> Result<u32, String> {
+    if !cfg!(windows) {
+        return Err("managed setup currently supports Windows builds only".into());
+    }
+    let parsed = SetupTarget::parse(&target)
+        .ok_or_else(|| format!("unknown setup target '{target}'"))?;
+    let root = setup_root(&install_dir);
+
+    // Keep the requested target even when already satisfied (it may need a
+    // refresh, and the script blocks are individually idempotent); only prune
+    // already-ready prerequisites.
+    let closure: Vec<SetupTarget> = prereqs_for(parsed)
+        .into_iter()
+        .filter(|&t| t == parsed || !target_ready(t, &root))
+        .collect();
+
+    let script = build_setup_script(&root, &closure);
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]);
+    let id = registry.next_id();
+    spawn_streamed(registry.tasks.clone(), id, cmd, channel)?;
+    Ok(id)
+}
+
+#[cfg(test)]
+mod setup_target_tests {
+    use super::{prereqs_for, SetupTarget};
+
+    #[test]
+    fn vad_closure_is_full_chain_in_order() {
+        assert_eq!(
+            prereqs_for(SetupTarget::Vad),
+            vec![
+                SetupTarget::Uv,
+                SetupTarget::Repo,
+                SetupTarget::Python,
+                SetupTarget::Ytdlp,
+                SetupTarget::Vad,
+            ]
+        );
+    }
+
+    #[test]
+    fn uv_and_ffmpeg_are_self_contained() {
+        assert_eq!(prereqs_for(SetupTarget::Uv), vec![SetupTarget::Uv]);
+        assert_eq!(prereqs_for(SetupTarget::Ffmpeg), vec![SetupTarget::Ffmpeg]);
+    }
+
+    #[test]
+    fn requirements_pulls_uv_repo_python() {
+        assert_eq!(
+            prereqs_for(SetupTarget::Requirements),
+            vec![
+                SetupTarget::Uv,
+                SetupTarget::Repo,
+                SetupTarget::Python,
+                SetupTarget::Requirements,
+            ]
+        );
+    }
+
+    #[test]
+    fn label_and_key_are_defined_for_all() {
+        for t in super::ALL_TARGETS {
+            assert!(!t.key().is_empty());
+            assert!(!t.label().is_empty());
+            assert_eq!(SetupTarget::parse(t.key()), Some(t));
+        }
+    }
 }
 
 #[tauri::command]
@@ -1197,6 +1443,7 @@ pub fn run() {
             keep_ref,
             check_vad_model,
             download_vad,
+            install_target,
             list_runs,
             run_overview,
             run_overview_for,

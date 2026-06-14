@@ -35,6 +35,7 @@ __all__ = [
     "QualityThresholds",
     "passes_quality",
     "normalize_transcript",
+    "normalize_transcript_ar",
     "true_peak_dbfs",
     "write_ljspeech",
     "CompletedManifest",
@@ -121,6 +122,7 @@ def passes_quality(
         is_verified = rec.verified if verified is None else verified
         align_score = rec.align_score
         transcript = rec.transcript
+        language = rec.language
         transcript_available = True  # a ClipRecord always carries a transcript field (F3 applies)
     else:
         audio = wav
@@ -136,6 +138,7 @@ def passes_quality(
         # uses ClipRecords, so F3 still fully covers the real dataset path).
         transcript_available = transcript is not None
         transcript = transcript or ""
+        language = getattr(spec_or_record, "language", "en") or "en"
 
     if audio is None or a_sr is None:
         return False, {"no_audio": True}
@@ -147,7 +150,7 @@ def passes_quality(
     # transcript field (the real export path always passes ClipRecords).
     if t.require_nonempty_transcript and transcript_available:
         raw = (transcript or "").strip()
-        if not raw or not normalize_transcript(raw).strip():
+        if not raw or not normalize_transcript(raw, language).strip():
             reasons["empty_transcript"] = True
 
     # (1) duration band
@@ -258,7 +261,121 @@ def _ordinal_to_words(n: int) -> str | None:
     return _ORDINALS.get(n)
 
 
-def normalize_transcript(text: str) -> str:
+# --- Arabic (ar) normalization -------------------------------------------------------- #
+# The English passes above (integer->word, Dr./Mr., ordinals) CORRUPT Arabic text — e.g. the
+# integer pass would turn an Arabic-Indic "٣" into the Latin word "three", and `\d` matches
+# Arabic-Indic digits by default. When a clip's language is Arabic, normalize_transcript()
+# routes here instead. Pure-stdlib (regex + str.translate + unicodedata), no PyArabic/CAMeL
+# dependency, matching this module's model-free contract.
+
+# Combining diacritics (harakat/tashkeel + Quranic marks) and tatweel/kashida (U+0640).
+# Stripping these is safe and standard for TTS text: ASR output here is already undiacritized,
+# and tatweel is a purely decorative elongation with no phonetic value.
+_AR_DIACRITICS_RE = re.compile(
+    "[ؐ-ًؚ-ٰٟۖ-ۜ۟-۪ۨ-ۭـ]"
+)
+
+# Arabic-Indic (U+0660–0669) and Extended/Persian (U+06F0–06F9) digits -> ASCII, so one
+# integer-speller handles every digit script.
+_AR_DIGIT_MAP: dict[int, str] = {ord(c): str(i) for i, c in enumerate("٠١٢٣٤٥٦٧٨٩")}
+_AR_DIGIT_MAP.update({ord(c): str(i) for i, c in enumerate("۰۱۲۳۴۵۶۷۸۹")})
+
+# Cardinal number words (masculine form; the common default for read-aloud digit strings).
+_AR_ONES = {1: "واحد", 2: "اثنان", 3: "ثلاثة", 4: "أربعة", 5: "خمسة",
+            6: "ستة", 7: "سبعة", 8: "ثمانية", 9: "تسعة"}
+_AR_TEENS = {10: "عشرة", 11: "أحد عشر", 12: "اثنا عشر", 13: "ثلاثة عشر", 14: "أربعة عشر",
+             15: "خمسة عشر", 16: "ستة عشر", 17: "سبعة عشر", 18: "ثمانية عشر", 19: "تسعة عشر"}
+_AR_TENS = {20: "عشرون", 30: "ثلاثون", 40: "أربعون", 50: "خمسون",
+            60: "ستون", 70: "سبعون", 80: "ثمانون", 90: "تسعون"}
+_AR_HUNDREDS = {1: "مئة", 2: "مئتان", 3: "ثلاثمئة", 4: "أربعمئة", 5: "خمسمئة",
+                6: "ستمئة", 7: "سبعمئة", 8: "ثمانمئة", 9: "تسعمئة"}
+
+
+def _ar_below_100(n: int) -> str:
+    """Spoken form for 1..99 (units precede tens, joined with the conjunction 'و')."""
+    if n < 10:
+        return _AR_ONES[n]
+    if n < 20:
+        return _AR_TEENS[n]
+    tens, units = (n // 10) * 10, n % 10
+    if units == 0:
+        return _AR_TENS[tens]
+    return f"{_AR_ONES[units]} و{_AR_TENS[tens]}"
+
+
+def _ar_thousands(k: int) -> str:
+    """Spoken form for the thousands group k*1000 where 1 <= k <= 9."""
+    if k == 1:
+        return "ألف"
+    if k == 2:
+        return "ألفان"
+    return f"{_AR_ONES[k]} آلاف"  # 3..9: e.g. "ثلاثة آلاف"
+
+
+def _ar_int_to_words(n: int) -> str:
+    """Minimal Arabic integer-to-words for 0..9999 (deterministic; mirrors _int_to_words scope).
+
+    Groups (thousands / hundreds / 1..99) are joined with the conjunction 'و', descending.
+    Best-effort masculine cardinals — Arabic number agreement (gender/case) is context-
+    dependent, so this targets read-aloud digit strings, not grammatically perfect prose.
+    """
+    if n == 0:
+        return "صفر"
+    if n < 0:
+        return "ناقص " + _ar_int_to_words(-n)
+    parts: list[str] = []
+    thousands, rem = divmod(n, 1000)
+    if thousands:
+        parts.append(_ar_thousands(thousands))
+    hundreds, below = divmod(rem, 100)
+    if hundreds:
+        parts.append(_AR_HUNDREDS[hundreds])
+    if below:
+        parts.append(_ar_below_100(below))
+    return " و".join(parts)
+
+
+def normalize_transcript_ar(text: str) -> str:
+    """Arabic TTS text normalization: NFC, strip diacritics/tatweel, digit script + integers.
+
+    Passes:
+      1. NFC — fold Arabic presentation/compatibility forms to a canonical encoding.
+      2. Strip harakat/tashkeel + Quranic marks + tatweel (kashida) — no phonetic value.
+      3. Normalize Arabic-Indic / Persian digits to ASCII (so one speller covers all scripts).
+      4. Integer expansion — standalone 0..9999 -> Arabic words; larger numbers left as digits
+         (mirrors the English path's scope). Avoids the English integer->Latin-word corruption.
+      5. Whitespace collapse.
+
+    Conservative on letters: alef/hamza/ya/ta-marbuta variants are PRESERVED (collapsing them
+    changes pronunciation, which matters for TTS). The canonical text stays in the raw
+    ``transcript`` column; this only fills ``normalized_transcript``.
+    """
+    if not text:
+        return ""
+    import unicodedata
+    s = unicodedata.normalize("NFC", text)
+    s = _AR_DIACRITICS_RE.sub("", s)        # harakat/tashkeel + tatweel
+    s = s.translate(_AR_DIGIT_MAP)          # Arabic-Indic/Persian digits -> ASCII
+
+    def _repl(m: "re.Match[str]") -> str:
+        val = int(m.group(0))
+        return _ar_int_to_words(val) if 0 <= val <= 9999 else m.group(0)
+
+    s = re.sub(r"\b\d+\b", _repl, s)
+    s = _WS_RE.sub(" ", s).strip()
+    return s
+
+
+# Matches "ar", "ar-SA", "ar_EG", etc. (case-insensitive) — the Arabic language family.
+_AR_LANG_RE = re.compile(r"^ar(?:$|[-_])", re.IGNORECASE)
+
+
+def _is_arabic_lang(language: str | None) -> bool:
+    """True for an Arabic language tag ('ar', 'ar-SA', 'ar_EG', ...)."""
+    return bool(language) and bool(_AR_LANG_RE.match(language.strip()))
+
+
+def normalize_transcript(text: str, language: str = "en") -> str:
     """Deterministic TTS text normalization: abbreviations, ordinals, integers->words, cleanup.
 
     Pass order (each pass is non-overlapping with the next):
@@ -273,7 +390,13 @@ def normalize_transcript(text: str) -> str:
     Conservative on purpose: the canonical transcript stays in the raw ``transcript`` column.
     Known limitations: decimal/version/time strings (e.g. "v2", "3.5", "10:30") may expand
     their digit components — this is documented behaviour (OQ-R3 option b; no guards added).
+
+    ``language``: an Arabic tag ('ar', 'ar-SA', ...) routes to :func:`normalize_transcript_ar`
+    (the English number/abbreviation passes would corrupt Arabic text). Any other value keeps
+    the English path below byte-for-byte (the default, so existing callers are unaffected).
     """
+    if _is_arabic_lang(language):
+        return normalize_transcript_ar(text)
     if not text:
         return ""
     s = text.strip()
@@ -577,7 +700,7 @@ def write_ljspeech(
             dur = len(audio) / float(a_sr) if a_sr else rec.duration
         else:
             dur = rec.duration
-        norm = normalize_transcript(rec.transcript)
+        norm = normalize_transcript(rec.transcript, rec.language)
         # M2: the writer uses csv.QUOTE_MINIMAL so a field containing the '|' delimiter is
         # quoted and a proper csv.reader round-trips it (the literal pipe is preserved, per the
         # export contract). We additionally collapse embedded CR/LF to spaces so a *naive*
